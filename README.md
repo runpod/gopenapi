@@ -13,10 +13,9 @@
 ## Installation
 
 ```bash
-go get github.com/your-username/gopenapi 
+go get github.com/gabewillen/gopenapi 
 ```
 
-*(Replace `your-username` with your actual GitHub username or the appropriate import path)*
 
 ## Usage
 
@@ -27,7 +26,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/your-username/gopenapi" // Replace with your actual import path
+	"github.com/gabewillen/gopenapi" // Replace with your actual import path
 )
 
 // Define a struct for your data
