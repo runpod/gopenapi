@@ -1,0 +1,1001 @@
+package parser
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/runpod/gopenapi"
+	"github.com/runpod/gopenapi/cmd/gopenapi/parser/internal/mock"
+)
+
+// Test that we can resolve types from other packages
+func TestCrossPackageTypeResolution(t *testing.T) {
+	// Create a spec that uses types from the standard library and other packages
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Cross Package Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/events": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createEvent",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									Name      string        `json:"name"`
+									Timestamp time.Time     `json:"timestamp"` // Type from time package
+									Duration  time.Duration `json:"duration"`  // Another type from time package
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "Event created",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+										ID        string    `json:"id"`
+										CreatedAt time.Time `json:"created_at"`
+									}]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to the request body schema
+	paths, ok := result["paths"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Paths should be an object")
+	}
+
+	eventsPath, ok := paths["/events"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Events path should exist")
+	}
+
+	postOp, ok := eventsPath["post"].(map[string]interface{})
+	if !ok {
+		t.Fatal("POST operation should exist")
+	}
+
+	requestBody, ok := postOp["requestBody"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Request body should exist")
+	}
+
+	content, ok := requestBody["content"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Content should exist")
+	}
+
+	appJson, ok := content["application/json"].(map[string]interface{})
+	if !ok {
+		t.Fatal("application/json content should exist")
+	}
+
+	schema, ok := appJson["schema"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Schema should exist")
+	}
+
+	properties, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Properties should exist")
+	}
+
+	// Test that time.Time is properly resolved
+	timestampProp, ok := properties["timestamp"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Timestamp property should exist")
+	}
+
+	// time.Time should be resolved to a string type in OpenAPI
+	timestampType, ok := timestampProp["type"].(string)
+	if !ok {
+		t.Fatal("Timestamp type should be a string")
+	}
+
+	// time.Time should be mapped to string in OpenAPI
+	if timestampType != "string" {
+		t.Errorf("Expected timestamp type to be 'string', got %s", timestampType)
+	}
+
+	// Test that time.Duration is properly resolved
+	durationProp, ok := properties["duration"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Duration property should exist")
+	}
+
+	durationType, ok := durationProp["type"].(string)
+	if !ok {
+		t.Fatal("Duration type should be a string")
+	}
+
+	// time.Duration should be mapped to integer (nanoseconds) or string in OpenAPI
+	if durationType != "integer" && durationType != "string" {
+		t.Errorf("Expected duration type to be 'integer' or 'string', got %s", durationType)
+	}
+
+	t.Logf("Successfully resolved cross-package types: timestamp=%s, duration=%s", timestampType, durationType)
+}
+
+// Test with more complex nested types from other packages
+func TestComplexCrossPackageTypes(t *testing.T) {
+	// Test with types that have complex internal structure
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Complex Cross Package Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/complex": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createComplex",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									// Test with various standard library types
+									URL     string        `json:"url"`     // Basic type
+									Timeout time.Duration `json:"timeout"` // time package
+									When    time.Time     `json:"when"`    // time package
+									// Could add more complex types here like net.IP, url.URL, etc.
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.String},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Verify it's valid JSON
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// The test passes if we can generate valid JSON without panicking
+	// The actual type resolution will be tested by the previous test
+	t.Log("Successfully generated OpenAPI JSON for complex cross-package types")
+}
+
+func TestSpecToOpenAPIJSON(t *testing.T) {
+	// Test spec for JSON conversion
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:       "Test API",
+			Description: "A test API for JSON conversion",
+			Version:     "1.0.0",
+		},
+		Servers: gopenapi.Servers{
+			{
+				URL:         "https://api.test.com",
+				Description: "Test server",
+			},
+		},
+		Paths: gopenapi.Paths{
+			"/users/{id}": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "getUserById",
+					Summary:     "Get user by ID",
+					Description: "Retrieve a user by their ID",
+					Parameters: gopenapi.Parameters{
+						{
+							Name:        "id",
+							In:          gopenapi.InPath,
+							Description: "User ID",
+							Required:    true,
+							Schema:      gopenapi.Schema{Type: gopenapi.Integer},
+						},
+						{
+							Name:        "include",
+							In:          gopenapi.InQuery,
+							Description: "Include additional data",
+							Required:    false,
+							Schema:      gopenapi.Schema{Type: gopenapi.String},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "User found",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+										ID   int    `json:"id"`
+										Name string `json:"name"`
+									}]()},
+								},
+							},
+						},
+						404: {
+							Description: "User not found",
+						},
+					},
+				},
+			},
+			"/users": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createUser",
+					Summary:     "Create user",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									Name  string `json:"name"`
+									Email string `json:"email"`
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "User created",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+										ID int `json:"id"`
+									}]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Test basic structure
+	if result["openapi"] != "3.0.0" {
+		t.Errorf("Expected openapi version 3.0.0, got %v", result["openapi"])
+	}
+
+	// Test info section
+	info, ok := result["info"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Info section should be an object")
+	}
+	if info["title"] != "Test API" {
+		t.Errorf("Expected title 'Test API', got %v", info["title"])
+	}
+	if info["version"] != "1.0.0" {
+		t.Errorf("Expected version '1.0.0', got %v", info["version"])
+	}
+
+	// Test servers section
+	servers, ok := result["servers"].([]interface{})
+	if !ok {
+		t.Fatal("Servers section should be an array")
+	}
+	if len(servers) != 1 {
+		t.Errorf("Expected 1 server, got %d", len(servers))
+	}
+
+	// Test paths section
+	paths, ok := result["paths"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Paths section should be an object")
+	}
+
+	// Test specific path
+	userPath, ok := paths["/users/{id}"].(map[string]interface{})
+	if !ok {
+		t.Fatal("User path should exist")
+	}
+
+	// Test GET operation
+	getOp, ok := userPath["get"].(map[string]interface{})
+	if !ok {
+		t.Fatal("GET operation should exist")
+	}
+	if getOp["operationId"] != "getUserById" {
+		t.Errorf("Expected operationId 'getUserById', got %v", getOp["operationId"])
+	}
+
+	// Test parameters
+	params, ok := getOp["parameters"].([]interface{})
+	if !ok {
+		t.Fatal("Parameters should be an array")
+	}
+	if len(params) != 2 {
+		t.Errorf("Expected 2 parameters, got %d", len(params))
+	}
+
+	// Test path parameter
+	pathParam, ok := params[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("First parameter should be an object")
+	}
+	if pathParam["name"] != "id" {
+		t.Errorf("Expected parameter name 'id', got %v", pathParam["name"])
+	}
+	if pathParam["in"] != "path" {
+		t.Errorf("Expected parameter in 'path', got %v", pathParam["in"])
+	}
+	if pathParam["required"] != true {
+		t.Errorf("Expected parameter required true, got %v", pathParam["required"])
+	}
+
+	// Test responses
+	responses, ok := getOp["responses"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Responses should be an object")
+	}
+	if _, exists := responses["200"]; !exists {
+		t.Error("200 response should exist")
+	}
+	if _, exists := responses["404"]; !exists {
+		t.Error("404 response should exist")
+	}
+}
+
+func TestParameterLocationToString(t *testing.T) {
+	tests := []struct {
+		name     string
+		location gopenapi.In
+		expected string
+	}{
+		{
+			name:     "Path parameter",
+			location: gopenapi.InPath,
+			expected: "path",
+		},
+		{
+			name:     "Query parameter",
+			location: gopenapi.InQuery,
+			expected: "query",
+		},
+		{
+			name:     "Header parameter",
+			location: gopenapi.InHeader,
+			expected: "header",
+		},
+		{
+			name:     "Cookie parameter",
+			location: gopenapi.InCookie,
+			expected: "cookie",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parameterLocationToString(tt.location)
+			if result != tt.expected {
+				t.Errorf("parameterLocationToString() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGoTypeToOpenAPIType(t *testing.T) {
+	tests := []struct {
+		name     string
+		goType   reflect.Type
+		expected string
+	}{
+		{
+			name:     "String type",
+			goType:   reflect.TypeOf(""),
+			expected: "string",
+		},
+		{
+			name:     "Int type",
+			goType:   reflect.TypeOf(0),
+			expected: "integer",
+		},
+		{
+			name:     "Float64 type",
+			goType:   reflect.TypeOf(0.0),
+			expected: "number",
+		},
+		{
+			name:     "Bool type",
+			goType:   reflect.TypeOf(false),
+			expected: "boolean",
+		},
+		{
+			name:     "Slice type",
+			goType:   reflect.TypeOf([]string{}),
+			expected: "array",
+		},
+		{
+			name:     "Struct type",
+			goType:   reflect.TypeOf(struct{}{}),
+			expected: "object",
+		},
+		{
+			name:     "Pointer type",
+			goType:   reflect.TypeOf((*string)(nil)),
+			expected: "string",
+		},
+		{
+			name:     "time.Time type",
+			goType:   reflect.TypeOf(time.Time{}),
+			expected: "string",
+		},
+		{
+			name:     "time.Duration type",
+			goType:   reflect.TypeOf(time.Duration(0)),
+			expected: "integer",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := goTypeToOpenAPIType(tt.goType)
+			if result != tt.expected {
+				t.Errorf("goTypeToOpenAPIType() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test with types from multiple different packages to ensure generic resolution
+func TestMultiplePackageTypeResolution(t *testing.T) {
+	// Create a spec that uses types from various packages
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Multi Package Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/test": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testMultiplePackages",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									// Standard library types
+									Timestamp time.Time     `json:"timestamp"`
+									Duration  time.Duration `json:"duration"`
+
+									// Basic types for comparison
+									Name   string `json:"name"`
+									Count  int    `json:"count"`
+									Active bool   `json:"active"`
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+										Success   bool      `json:"success"`
+										CreatedAt time.Time `json:"created_at"`
+									}]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to the request body schema properties
+	paths := result["paths"].(map[string]interface{})
+	testPath := paths["/test"].(map[string]interface{})
+	postOp := testPath["post"].(map[string]interface{})
+	requestBody := postOp["requestBody"].(map[string]interface{})
+	content := requestBody["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+	properties := schema["properties"].(map[string]interface{})
+
+	// Test that all types are correctly resolved
+	expectedTypes := map[string]string{
+		"timestamp": "string",  // time.Time should be string
+		"duration":  "integer", // time.Duration should be integer
+		"name":      "string",  // Basic string
+		"count":     "integer", // Basic int
+		"active":    "boolean", // Basic bool
+	}
+
+	for fieldName, expectedType := range expectedTypes {
+		prop, exists := properties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("Property %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("Property %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("Property %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	// Test response types as well
+	responses := postOp["responses"].(map[string]interface{})
+	response200 := responses["200"].(map[string]interface{})
+	responseContent := response200["content"].(map[string]interface{})
+	responseAppJson := responseContent["application/json"].(map[string]interface{})
+	responseSchema := responseAppJson["schema"].(map[string]interface{})
+	responseProperties := responseSchema["properties"].(map[string]interface{})
+
+	// Check response field types
+	successProp := responseProperties["success"].(map[string]interface{})
+	if successProp["type"] != "boolean" {
+		t.Errorf("Response success field should be boolean, got %s", successProp["type"])
+	}
+
+	createdAtProp := responseProperties["created_at"].(map[string]interface{})
+	if createdAtProp["type"] != "string" {
+		t.Errorf("Response created_at field should be string (time.Time), got %s", createdAtProp["type"])
+	}
+
+	t.Log("Successfully resolved types from multiple packages without hardcoding!")
+}
+
+// Test with mock package types to ensure cross-package type resolution
+func TestMockPackageTypeResolution(t *testing.T) {
+	// Create a spec that uses types from our mock package
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Mock Package Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/users": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createUser",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[mock.User]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "User created",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+										ID      mock.UserID `json:"id"`
+										Success bool        `json:"success"`
+									}]()},
+								},
+							},
+						},
+					},
+				},
+			},
+			"/products": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createProduct",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[mock.Product]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "Product created",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[mock.Product]()},
+								},
+							},
+						},
+					},
+				},
+			},
+			"/analytics": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "getAnalytics",
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Analytics data",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[mock.Analytics]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Test User creation endpoint
+	paths := result["paths"].(map[string]interface{})
+	usersPath := paths["/users"].(map[string]interface{})
+	postOp := usersPath["post"].(map[string]interface{})
+	requestBody := postOp["requestBody"].(map[string]interface{})
+	content := requestBody["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+	properties := schema["properties"].(map[string]interface{})
+
+	// Test User struct field types
+	expectedUserFields := map[string]string{
+		"id":         "string",  // mock.UserID (string alias)
+		"name":       "string",  // string
+		"email":      "string",  // string
+		"age":        "integer", // int
+		"is_active":  "boolean", // mock.IsActive (bool alias)
+		"created_at": "string",  // time.Time
+		"tags":       "array",   // mock.Tags ([]string alias)
+	}
+
+	for fieldName, expectedType := range expectedUserFields {
+		prop, exists := properties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("User field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("User field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("User field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	// Test Product creation endpoint
+	productsPath := paths["/products"].(map[string]interface{})
+	productPostOp := productsPath["post"].(map[string]interface{})
+	productRequestBody := productPostOp["requestBody"].(map[string]interface{})
+	productContent := productRequestBody["content"].(map[string]interface{})
+	productAppJson := productContent["application/json"].(map[string]interface{})
+	productSchema := productAppJson["schema"].(map[string]interface{})
+	productProperties := productSchema["properties"].(map[string]interface{})
+
+	// Test Product struct field types
+	expectedProductFields := map[string]string{
+		"id":           "integer", // mock.ProductID (int64 alias)
+		"name":         "string",  // string
+		"price":        "number",  // mock.Price (float64 alias)
+		"in_stock":     "boolean", // bool
+		"last_updated": "string",  // time.Time
+		"duration":     "integer", // time.Duration
+		"scores":       "array",   // mock.Scores ([]float64 alias)
+	}
+
+	for fieldName, expectedType := range expectedProductFields {
+		prop, exists := productProperties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("Product field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("Product field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("Product field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	// Test Analytics endpoint (complex nested structure)
+	analyticsPath := paths["/analytics"].(map[string]interface{})
+	analyticsGetOp := analyticsPath["get"].(map[string]interface{})
+	analyticsResponses := analyticsGetOp["responses"].(map[string]interface{})
+	analytics200 := analyticsResponses["200"].(map[string]interface{})
+	analyticsContent := analytics200["content"].(map[string]interface{})
+	analyticsAppJson := analyticsContent["application/json"].(map[string]interface{})
+	analyticsSchema := analyticsAppJson["schema"].(map[string]interface{})
+	analyticsProperties := analyticsSchema["properties"].(map[string]interface{})
+
+	// Test that nested structures are properly resolved as objects
+	expectedAnalyticsFields := map[string]string{
+		"user_metrics":    "object", // mock.UserMetrics
+		"product_metrics": "object", // mock.ProductMetrics
+		"time_range":      "object", // mock.TimeRange
+	}
+
+	for fieldName, expectedType := range expectedAnalyticsFields {
+		prop, exists := analyticsProperties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("Analytics field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("Analytics field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("Analytics field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	t.Log("Successfully resolved all mock package types!")
+}
+
+// Test with basic alias types from mock package
+func TestMockBasicAliasTypes(t *testing.T) {
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Mock Alias Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/test-aliases": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testAliases",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									UserID    mock.UserID    `json:"user_id"`
+									ProductID mock.ProductID `json:"product_id"`
+									Price     mock.Price     `json:"price"`
+									IsActive  mock.IsActive  `json:"is_active"`
+									Tags      mock.Tags      `json:"tags"`
+									Scores    mock.Scores    `json:"scores"`
+									Status    mock.Status    `json:"status"`
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.String},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to properties
+	paths := result["paths"].(map[string]interface{})
+	testPath := paths["/test-aliases"].(map[string]interface{})
+	postOp := testPath["post"].(map[string]interface{})
+	requestBody := postOp["requestBody"].(map[string]interface{})
+	content := requestBody["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+	properties := schema["properties"].(map[string]interface{})
+
+	// Test all alias types
+	expectedTypes := map[string]string{
+		"user_id":    "string",  // mock.UserID (string alias)
+		"product_id": "integer", // mock.ProductID (int64 alias)
+		"price":      "number",  // mock.Price (float64 alias)
+		"is_active":  "boolean", // mock.IsActive (bool alias)
+		"tags":       "array",   // mock.Tags ([]string alias)
+		"scores":     "array",   // mock.Scores ([]float64 alias)
+		"status":     "string",  // mock.Status (string alias)
+	}
+
+	for fieldName, expectedType := range expectedTypes {
+		prop, exists := properties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("Field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("Field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	t.Log("Successfully resolved all mock alias types!")
+}
+
+// Test with nested slice aliases
+func TestMockNestedSliceAliases(t *testing.T) {
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Mock Nested Slice Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/test-slices": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testSlices",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									UserIDs  mock.UserIDs   `json:"user_ids"` // []mock.UserID (slice of string alias)
+									Products []mock.Product `json:"products"` // []mock.Product (slice of struct)
+									Orders   []mock.Order   `json:"orders"`   // []mock.Order (slice of complex struct)
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.String},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to properties
+	paths := result["paths"].(map[string]interface{})
+	testPath := paths["/test-slices"].(map[string]interface{})
+	postOp := testPath["post"].(map[string]interface{})
+	requestBody := postOp["requestBody"].(map[string]interface{})
+	content := requestBody["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+	properties := schema["properties"].(map[string]interface{})
+
+	// Test all slice types should be arrays
+	expectedTypes := map[string]string{
+		"user_ids": "array", // mock.UserIDs ([]mock.UserID)
+		"products": "array", // []mock.Product
+		"orders":   "array", // []mock.Order
+	}
+
+	for fieldName, expectedType := range expectedTypes {
+		prop, exists := properties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("Field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("Field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	t.Log("Successfully resolved all mock nested slice types!")
+}
