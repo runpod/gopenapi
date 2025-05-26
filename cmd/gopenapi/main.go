@@ -68,7 +68,7 @@ func main() {
 		specFile    = flag.String("spec", "", "Go file containing the OpenAPI spec (required)")
 		specVar     = flag.String("var", "", "Variable name containing the spec (required, e.g., 'ExampleSpec')")
 		outputDir   = flag.String("output", ".", "Output directory for generated clients")
-		packageName = flag.String("package", "client", "Package name for generated code")
+		packageName = flag.String("package", "", "Package name for generated code")
 		languages   = flag.String("languages", "go", "Comma-separated list of languages to generate (go,python,typescript)")
 	)
 	flag.Parse()
