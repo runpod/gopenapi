@@ -19,6 +19,8 @@ type CreateUserRequest struct {
 	Email string `json:"email"`
 }
 
+type ID string
+
 // ExampleSpec is a sample OpenAPI specification
 var ExampleSpec = gopenapi.Spec{
 	OpenAPI: "3.0.0",
@@ -73,6 +75,23 @@ var ExampleSpec = gopenapi.Spec{
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					// Sample handler implementation
 				}),
+			},
+		},
+		"/id": gopenapi.Path{
+			Get: &gopenapi.Operation{
+				OperationId: "getId",
+				Summary:     "Get an ID",
+				Description: "Get an ID",
+				Responses: gopenapi.Responses{
+					200: {
+						Description: "OK",
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[ID]()},
+							},
+						},
+					},
+				},
 			},
 		},
 		"/string": gopenapi.Path{

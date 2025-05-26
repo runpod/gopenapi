@@ -571,15 +571,24 @@ func getTypeNameFromExpr(expr ast.Expr) string {
 func createReflectTypeFromGoTypes(t types.Type, pkg *packages.Package) reflect.Type {
 	switch typ := t.(type) {
 	case *types.Named:
-		// For named types, get the underlying struct
-		if structType, ok := typ.Underlying().(*types.Struct); ok {
-			return createStructType(structType, pkg)
+		// For named types, check the underlying type
+		underlying := typ.Underlying()
+		switch underlyingType := underlying.(type) {
+		case *types.Struct:
+			// Complex struct type - create a struct type
+			return createStructType(underlyingType, pkg)
+		case *types.Basic:
+			// Named type with primitive underlying type (like type ID string)
+			// Return the underlying primitive type
+			return getReflectTypeFromGoTypesType(underlyingType)
+		default:
+			// For other underlying types (slices, arrays, etc.), use the underlying type
+			return getReflectTypeFromGoTypesType(underlying)
 		}
-		return reflect.TypeOf((*interface{})(nil)).Elem()
 	case *types.Struct:
 		return createStructType(typ, pkg)
 	default:
-		return reflect.TypeOf((*interface{})(nil)).Elem()
+		return getReflectTypeFromGoTypesType(t)
 	}
 }
 
@@ -1680,10 +1689,8 @@ func schemaToGoType(schema gopenapi.Schema) string {
 	case gopenapi.Array:
 		return "[]interface{}"
 	default:
-		if schema.Type.Kind() == reflect.Struct {
-			return "interface{}" // For now, use interface{} for complex types
-		}
-		return "interface{}"
+		// For other types, use the reflect.Type to determine the Go type
+		return typeToGoType(schema.Type)
 	}
 }
 
