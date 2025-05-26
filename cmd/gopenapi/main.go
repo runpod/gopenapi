@@ -459,6 +459,7 @@ func parseSchemaFromASTWithTypes(lit *ast.CompositeLit, pkg *packages.Package) (
 							if resolvedType != nil {
 								schema.Type = resolvedType
 							} else {
+								fmt.Fprintf(os.Stderr, "Warning: Could not resolve type for Object[%s](), falling back to interface{}\n", getTypeNameFromExpr(indexExpr.Index))
 								schema.Type = gopenapi.Object[interface{}]()
 							}
 						}
@@ -547,6 +548,21 @@ func lookupImportedType(selector *ast.SelectorExpr, pkg *packages.Package) refle
 	}
 
 	return nil
+}
+
+// getTypeNameFromExpr extracts a readable type name from an AST expression for warnings
+func getTypeNameFromExpr(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		if pkg, ok := e.X.(*ast.Ident); ok {
+			return pkg.Name + "." + e.Sel.Name
+		}
+		return e.Sel.Name
+	default:
+		return "unknown"
+	}
 }
 
 // createReflectTypeFromGoTypes creates a reflect.Type from go/types.Type
@@ -1429,7 +1445,12 @@ func generateTemplateData(spec *gopenapi.Spec, packageName string, language stri
 		}
 
 		for method, operation := range methodOps {
-			if operation == nil || operation.OperationId == "" {
+			if operation == nil {
+				continue
+			}
+
+			if operation.OperationId == "" {
+				fmt.Fprintf(os.Stderr, "Warning: Operation %s %s is missing operationId and will be skipped\n", method, path)
 				continue
 			}
 
@@ -1493,7 +1514,8 @@ func generateTemplateData(spec *gopenapi.Spec, packageName string, language stri
 				opData.HasRequestBody = true
 				for _, content := range operation.RequestBody.Content {
 					if content.Schema.Type != nil {
-						opData.RequestBodyFields = schemaToFields(content.Schema)
+						requestBodyStructName := opData.StructName + "RequestBody"
+						opData.RequestBodyFields = schemaToFieldsWithName(content.Schema, requestBodyStructName)
 						break
 					}
 				}
@@ -1506,7 +1528,8 @@ func generateTemplateData(spec *gopenapi.Spec, packageName string, language stri
 						for _, content := range response.Content {
 							if content.Schema.Type != nil {
 								opData.HasResponseBody = true
-								opData.ResponseFields = schemaToFields(content.Schema)
+								responseStructName := opData.StructName + "Response"
+								opData.ResponseFields = schemaToFieldsWithName(content.Schema, responseStructName)
 								break
 							}
 						}
@@ -1624,6 +1647,7 @@ func toGoName(name string) string {
 
 func schemaToGoType(schema gopenapi.Schema) string {
 	if schema.Type == nil {
+		fmt.Fprintf(os.Stderr, "Warning: Schema has nil type, using interface{}\n")
 		return "interface{}"
 	}
 
@@ -1647,6 +1671,10 @@ func schemaToGoType(schema gopenapi.Schema) string {
 }
 
 func schemaToFields(schema gopenapi.Schema) []FieldData {
+	return schemaToFieldsWithName(schema, "")
+}
+
+func schemaToFieldsWithName(schema gopenapi.Schema, structName string) []FieldData {
 	var fields []FieldData
 
 	if schema.Type == nil || schema.Type.Kind() != reflect.Struct {
@@ -1669,10 +1697,23 @@ func schemaToFields(schema gopenapi.Schema) []FieldData {
 			}
 		}
 
+		goType := typeToGoType(field.Type)
+		if goType == "interface{}" {
+			// Use the provided struct name or fall back to reflect type name
+			typeName := structName
+			if typeName == "" {
+				typeName = t.Name()
+			}
+			if typeName == "" {
+				typeName = "unknown"
+			}
+			fmt.Fprintf(os.Stderr, "Warning: Field %s.%s has type interface{} - consider using a more specific type\n", typeName, field.Name)
+		}
+
 		fields = append(fields, FieldData{
 			Name:   fieldName,
 			GoName: field.Name,
-			GoType: typeToGoType(field.Type),
+			GoType: goType,
 		})
 	}
 
