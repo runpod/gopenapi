@@ -577,7 +577,8 @@ func createStructType(structType *types.Struct) reflect.Type {
 			tag = structType.Tag(i)
 		}
 
-		fieldType := getReflectTypeFromGoTypesType(field.Type())
+		// Use the recursive type resolution to properly handle named types
+		fieldType := createReflectTypeFromGoTypes(field.Type())
 
 		fields[i] = reflect.StructField{
 			Name: field.Name(),
@@ -626,11 +627,21 @@ func getReflectTypeFromGoTypesType(t types.Type) reflect.Type {
 			return reflect.TypeOf((*any)(nil)).Elem()
 		}
 	case *types.Slice:
-		elemType := getReflectTypeFromGoTypesType(typ.Elem())
+		// Use recursive resolution for slice elements
+		elemType := createReflectTypeFromGoTypes(typ.Elem())
 		return reflect.SliceOf(elemType)
 	case *types.Pointer:
-		elemType := getReflectTypeFromGoTypesType(typ.Elem())
+		// Use recursive resolution for pointer elements
+		elemType := createReflectTypeFromGoTypes(typ.Elem())
 		return reflect.PointerTo(elemType)
+	case *types.Map:
+		// Handle map types
+		keyType := createReflectTypeFromGoTypes(typ.Key())
+		valueType := createReflectTypeFromGoTypes(typ.Elem())
+		return reflect.MapOf(keyType, valueType)
+	case *types.Named:
+		// This should be handled by createReflectTypeFromGoTypes, but add as fallback
+		return createReflectTypeFromGoTypes(typ)
 	default:
 		return reflect.TypeOf((*interface{})(nil)).Elem()
 	}
@@ -938,9 +949,38 @@ func schemaToJSON(schema gopenapi.Schema) map[string]interface{} {
 						}
 					}
 
-					properties[fieldName] = map[string]interface{}{
+					fieldSchema := map[string]interface{}{
 						"type": goTypeToOpenAPIType(field.Type),
 					}
+
+					// If the field is a struct, recursively generate its properties
+					if field.Type.Kind() == reflect.Struct {
+						nestedProperties := make(map[string]interface{})
+						for j := 0; j < field.Type.NumField(); j++ {
+							nestedField := field.Type.Field(j)
+							if !nestedField.IsExported() {
+								continue
+							}
+
+							nestedJsonTag := nestedField.Tag.Get("json")
+							nestedFieldName := nestedField.Name
+							if nestedJsonTag != "" {
+								parts := strings.Split(nestedJsonTag, ",")
+								if parts[0] != "" && parts[0] != "-" {
+									nestedFieldName = parts[0]
+								}
+							}
+
+							nestedProperties[nestedFieldName] = map[string]interface{}{
+								"type": goTypeToOpenAPIType(nestedField.Type),
+							}
+						}
+						if len(nestedProperties) > 0 {
+							fieldSchema["properties"] = nestedProperties
+						}
+					}
+
+					properties[fieldName] = fieldSchema
 				}
 				if len(properties) > 0 {
 					schemaObj["properties"] = properties

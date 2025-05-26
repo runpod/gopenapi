@@ -1209,3 +1209,238 @@ func TestProblematicTypeScenarios(t *testing.T) {
 
 	t.Log("Successfully handled all problematic type scenarios!")
 }
+
+// Test that reproduces the exact issue where nested struct field types are not resolved
+func TestNestedStructFieldTypeResolution(t *testing.T) {
+	// This test reproduces the issue where DeviceSnapshot fields are resolved as interface{}
+	// instead of their actual types when the struct comes from an external package
+
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Nested Struct Field Resolution Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/devices/{id}": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					Summary:     "Get device by ID",
+					OperationId: "getDeviceById",
+					Parameters: gopenapi.Parameters{
+						{
+							Name:     "id",
+							In:       gopenapi.InPath,
+							Required: true,
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{
+										Type: gopenapi.Object[mock.DeviceSnapshot](),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to the response schema properties
+	paths := result["paths"].(map[string]interface{})
+	devicesPath := paths["/devices/{id}"].(map[string]interface{})
+	getOp := devicesPath["get"].(map[string]interface{})
+	responses := getOp["responses"].(map[string]interface{})
+	response200 := responses["200"].(map[string]interface{})
+	content := response200["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+
+	properties, exists := schema["properties"].(map[string]interface{})
+	if !exists {
+		t.Fatal("Schema should have properties")
+	}
+
+	// Test that DeviceSnapshot field types are correctly resolved
+	// These should NOT be interface{} but their actual types
+	expectedTypes := map[string]string{
+		"ID":          "integer", // mock.ID (uint64 alias)
+		"Index":       "integer", // mock.Index (uint64 alias)
+		"Kind":        "string",  // mock.Kind (string alias)
+		"Memory":      "object",  // mock.Memory (struct)
+		"Processes":   "object",  // mock.ProcessMap (map)
+		"Errors":      "array",   // []error
+		"Temperature": "number",  // float64
+	}
+
+	for fieldName, expectedType := range expectedTypes {
+		prop, exists := properties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("DeviceSnapshot field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("DeviceSnapshot field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("DeviceSnapshot field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	// Also check that Memory struct has its own properties resolved
+	memoryProp := properties["Memory"].(map[string]interface{})
+	if memoryProp["type"] == "object" {
+		if memoryProps, exists := memoryProp["properties"].(map[string]interface{}); exists {
+			expectedMemoryTypes := map[string]string{
+				"total":     "integer", // uint64
+				"used":      "integer", // uint64
+				"available": "integer", // uint64
+			}
+
+			for fieldName, expectedType := range expectedMemoryTypes {
+				if prop, exists := memoryProps[fieldName].(map[string]interface{}); exists {
+					if actualType := prop["type"].(string); actualType != expectedType {
+						t.Errorf("Memory field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+					}
+				} else {
+					t.Errorf("Memory field %s should exist", fieldName)
+				}
+			}
+		} else {
+			t.Error("Memory object should have properties")
+		}
+	}
+
+	t.Log("Successfully resolved all nested struct field types!")
+}
+
+// Test that reproduces the issue with deeply nested external package types
+func TestDeeplyNestedExternalTypes(t *testing.T) {
+	// Test with a complex structure that has multiple levels of nesting
+	// from external packages to ensure all levels are resolved correctly
+
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Deeply Nested External Types Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/analytics": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "getAnalytics",
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Analytics data",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{
+										Type: gopenapi.Object[mock.Analytics](),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify it's valid
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to the response schema
+	paths := result["paths"].(map[string]interface{})
+	analyticsPath := paths["/analytics"].(map[string]interface{})
+	getOp := analyticsPath["get"].(map[string]interface{})
+	responses := getOp["responses"].(map[string]interface{})
+	response200 := responses["200"].(map[string]interface{})
+	content := response200["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+	properties := schema["properties"].(map[string]interface{})
+
+	// Test top-level Analytics fields
+	expectedAnalyticsTypes := map[string]string{
+		"user_metrics":    "object", // mock.UserMetrics
+		"product_metrics": "object", // mock.ProductMetrics
+		"time_range":      "object", // mock.TimeRange
+	}
+
+	for fieldName, expectedType := range expectedAnalyticsTypes {
+		prop, exists := properties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("Analytics field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("Analytics field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("Analytics field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	// Test nested UserMetrics fields
+	userMetricsProp := properties["user_metrics"].(map[string]interface{})
+	if userMetricsProp["type"] == "object" {
+		if userMetricsProps, exists := userMetricsProp["properties"].(map[string]interface{}); exists {
+			expectedUserMetricsTypes := map[string]string{
+				"total_users":  "integer", // int64
+				"active_users": "integer", // int64
+				"new_users":    "integer", // int64
+				"user_ids":     "array",   // mock.UserIDs ([]mock.UserID)
+				"last_updated": "string",  // time.Time
+			}
+
+			for fieldName, expectedType := range expectedUserMetricsTypes {
+				if prop, exists := userMetricsProps[fieldName].(map[string]interface{}); exists {
+					if actualType := prop["type"].(string); actualType != expectedType {
+						t.Errorf("UserMetrics field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+					}
+				} else {
+					t.Errorf("UserMetrics field %s should exist", fieldName)
+				}
+			}
+		} else {
+			t.Error("UserMetrics object should have properties")
+		}
+	}
+
+	t.Log("Successfully resolved all deeply nested external types!")
+}

@@ -8,10 +8,42 @@ type ProductID int64
 type Price float64
 type IsActive bool
 
+// More complex aliases that mirror the device package structure
+type ID uint64
+type Index uint64
+type Kind string
+
 // Slice aliases
 type Tags []string
 type Scores []float64
 type UserIDs []UserID
+
+// Complex nested package-like structure
+type Memory struct {
+	Total     uint64 `json:"total"`
+	Used      uint64 `json:"used"`
+	Available uint64 `json:"available"`
+}
+
+type Process struct {
+	PID     uint64 `json:"pid"`
+	Name    string `json:"name"`
+	Memory  uint64 `json:"memory"`
+	CPUTime uint64 `json:"cpu_time"`
+}
+
+type ProcessMap map[string]Process
+
+// This mirrors the device.Snapshot structure from the user's example
+type DeviceSnapshot struct {
+	ID          ID         `json:"ID"`
+	Index       Index      `json:"Index"`
+	Kind        Kind       `json:"Kind"`
+	Memory      Memory     `json:"Memory"`
+	Processes   ProcessMap `json:"Processes"`
+	Errors      []error    `json:"Errors"`
+	Temperature float64    `json:"Temperature"`
+}
 
 // Struct with various field types
 type User struct {
