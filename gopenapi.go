@@ -535,6 +535,14 @@ func NewServer(spec *Spec, port string) (*Server, error) {
 	}, nil
 }
 
+func Serve(ctx context.Context, listener net.Listener, spec *Spec) error {
+	mux, err := NewServerMux(spec)
+	if err != nil {
+		return err
+	}
+	return http.Serve(listener, mux)
+}
+
 type key[T any] struct{}
 
 var (
