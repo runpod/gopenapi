@@ -19,14 +19,18 @@ import (
 
 // ParseSpecFromFile parses a Go file and extracts the specified gopenapi.Spec variable
 func ParseSpecFromFile(filename, varName string) (gopenapi.Spec, error) {
-	return parseSpecViaPackages(filename, varName)
+	// Use the directory of the file as the working directory
+	dir := filepath.Dir(filename)
+	return ParseSpecFromFileWithPath(filename, varName, dir)
+}
+
+// ParseSpecFromFileWithPath parses a Go file and extracts the specified gopenapi.Spec variable using a specific working directory
+func ParseSpecFromFileWithPath(filename, varName, workingDir string) (gopenapi.Spec, error) {
+	return parseSpecViaPackages(filename, varName, workingDir)
 }
 
 // parseSpecViaPackages parses the Go file using go/packages and extracts the gopenapi.Spec
-func parseSpecViaPackages(filename, varName string) (gopenapi.Spec, error) {
-	// Get the directory containing the file
-	dir := filepath.Dir(filename)
-
+func parseSpecViaPackages(filename, varName, workingDir string) (gopenapi.Spec, error) {
 	// Load the package with type information
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
@@ -38,12 +42,36 @@ func parseSpecViaPackages(filename, varName string) (gopenapi.Spec, error) {
 			packages.NeedTypesSizes |
 			packages.NeedSyntax |
 			packages.NeedTypesInfo,
-		Dir:   dir,
+		Dir:   workingDir,
 		Fset:  token.NewFileSet(),
 		Tests: false,
 	}
 
-	pkgs, err := packages.Load(cfg, ".")
+	// Calculate the package pattern
+	// First, get the absolute path of the file
+	absFilename, err := filepath.Abs(filename)
+	if err != nil {
+		return gopenapi.Spec{}, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// Get the directory of the file
+	fileDir := filepath.Dir(absFilename)
+
+	// Calculate the relative path from the working directory to the file directory
+	relPath, err := filepath.Rel(workingDir, fileDir)
+	if err != nil {
+		// If we can't calculate relative path, try loading with the file directory
+		relPath = fileDir
+	}
+
+	// Convert to package pattern (use forward slashes even on Windows)
+	packagePattern := "./" + filepath.ToSlash(relPath)
+	if packagePattern == "./" || packagePattern == "./." {
+		packagePattern = "."
+	}
+
+	// Load from the working directory to ensure all dependencies are available
+	pkgs, err := packages.Load(cfg, packagePattern)
 	if err != nil {
 		return gopenapi.Spec{}, fmt.Errorf("failed to load package: %w", err)
 	}
@@ -59,10 +87,6 @@ func parseSpecViaPackages(filename, varName string) (gopenapi.Spec, error) {
 
 	// Find the file in the package
 	var targetFile *ast.File
-	absFilename, err := filepath.Abs(filename)
-	if err != nil {
-		return gopenapi.Spec{}, fmt.Errorf("failed to get absolute path: %w", err)
-	}
 
 	for _, file := range pkg.Syntax {
 		filePos := pkg.Fset.Position(file.Pos()).Filename

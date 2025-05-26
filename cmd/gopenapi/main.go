@@ -70,6 +70,7 @@ func generateSpecCommand() {
 	specFile := fs.String("spec", "", "Go file containing the OpenAPI spec (required)")
 	specVar := fs.String("var", "", "Variable name containing the spec (required, e.g., 'ExampleSpec')")
 	output := fs.String("output", "", "Output file for OpenAPI JSON (if empty, outputs to stdout)")
+	path := fs.String("path", "", "Working directory for package resolution (defaults to current directory)")
 	help := fs.Bool("help", false, "Show help information")
 
 	fs.Usage = func() {
@@ -85,12 +86,14 @@ Flags:
         Variable name containing the spec (required, e.g., 'ExampleSpec')
   -output string
         Output file for OpenAPI JSON (if empty, outputs to stdout)
+  -path string
+        Working directory for package resolution (defaults to current directory)
   -help
         Show this help message
 
 Examples:
   gopenapi generate spec -spec examples/spec/spec.go -var ExampleSpec -output openapi.json
-  gopenapi generate spec -spec examples/spec/spec.go -var ExampleSpec
+  gopenapi generate spec -spec examples/spec/spec.go -var ExampleSpec -path /path/to/project
 `)
 	}
 
@@ -110,7 +113,17 @@ Examples:
 		os.Exit(1)
 	}
 
-	spec, err := parser.ParseSpecFromFile(*specFile, *specVar)
+	// Use current directory if path not specified
+	workingDir := *path
+	if workingDir == "" {
+		var err error
+		workingDir, err = os.Getwd()
+		if err != nil {
+			log.Fatalf("Failed to get current directory: %v", err)
+		}
+	}
+
+	spec, err := parser.ParseSpecFromFileWithPath(*specFile, *specVar, workingDir)
 	if err != nil {
 		log.Fatalf("Failed to parse spec from file: %v", err)
 	}
@@ -140,6 +153,7 @@ func generateClientCommand() {
 	outputDir := fs.String("output", "", "Output directory for generated clients (if empty, outputs to stdout)")
 	packageName := fs.String("package", "client", "Package name for generated code")
 	languages := fs.String("languages", "go", "Comma-separated list of languages to generate (go,python,typescript)")
+	path := fs.String("path", "", "Working directory for package resolution (defaults to current directory)")
 	help := fs.Bool("help", false, "Show help information")
 
 	fs.Usage = func() {
@@ -160,13 +174,15 @@ Flags:
   -languages string
         Comma-separated list of languages to generate (default "go")
         Supported languages: go, python, typescript
+  -path string
+        Working directory for package resolution (defaults to current directory)
   -help
         Show this help message
 
 Examples:
   gopenapi generate client -spec examples/spec/spec.go -var ExampleSpec -output ./clients
   gopenapi generate client -spec examples/spec/spec.go -var ExampleSpec -languages go,python
-  gopenapi generate client -spec examples/spec/spec.go -var ExampleSpec -package myclient
+  gopenapi generate client -spec examples/spec/spec.go -var ExampleSpec -package myclient -path /path/to/project
 `)
 	}
 
@@ -186,7 +202,17 @@ Examples:
 		os.Exit(1)
 	}
 
-	spec, err := parser.ParseSpecFromFile(*specFile, *specVar)
+	// Use current directory if path not specified
+	workingDir := *path
+	if workingDir == "" {
+		var err error
+		workingDir, err = os.Getwd()
+		if err != nil {
+			log.Fatalf("Failed to get current directory: %v", err)
+		}
+	}
+
+	spec, err := parser.ParseSpecFromFileWithPath(*specFile, *specVar, workingDir)
 	if err != nil {
 		log.Fatalf("Failed to parse spec from file: %v", err)
 	}
