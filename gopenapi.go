@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -471,49 +472,7 @@ func handle(spec *Spec, operation *Operation) (http.HandlerFunc, error) {
 	}, nil
 }
 
-// func flattenSchemas(schemas Schemas, basePath string) Schemas {
-// 	flat := make(Schemas, len(schemas))
-// 	for name, schema := range schemas {
-// 		flat[path.Join(basePath, name)] = schema
-// 	}
-// 	return flat
-// }
-
-// func resolveRefs(spec *Spec) error {
-// 	schemas := flattenSchemas(spec.Components.Schemas, "#/components/schemas/")
-// 	for _, path := range spec.Paths {
-// 		for _, operation := range []*Operation{path.Get, path.Post, path.Put, path.Delete, path.Patch, path.Head, path.Options, path.Trace} {
-// 			if operation == nil {
-// 				continue
-// 			}
-// 			if operation.RequestBody.Content != nil {
-// 				for mediaType, content := range operation.RequestBody.Content {
-// 					if content.Schema.Ref != "" {
-// 						maybeSchema, ok := schemas[content.Schema.Ref]
-// 						if !ok {
-// 							return fmt.Errorf("schema %s not found", content.Schema.Ref)
-// 						}
-// 						content.Schema.Type = maybeSchema.Type
-// 						operation.RequestBody.Content[mediaType] = content
-// 					}
-// 				}
-// 			}
-// 			for i, parameter := range operation.Parameters {
-// 				if parameter.Schema.Ref != "" {
-// 					maybeSchema, ok := schemas[parameter.Schema.Ref]
-// 					if !ok {
-// 						return fmt.Errorf("schema %s not found", parameter.Schema.Ref)
-// 					}
-// 					parameter.Schema.Type = maybeSchema.Type
-// 					operation.Parameters[i] = parameter
-// 				}
-// 			}
-// 		}
-// 	}
-// 	return nil
-// }
-
-func NewServer(spec *Spec, port string) (*Server, error) {
+func NewHandler(spec *Spec) (http.Handler, error) {
 	mux := http.NewServeMux()
 	hosts := make([]string, len(spec.Servers))
 	if spec.SecurityMiddleware == nil {
@@ -554,13 +513,23 @@ func NewServer(spec *Spec, port string) (*Server, error) {
 			}
 		}
 	}
+	return mux, nil
+}
+
+func NewServer(spec *Spec, port string) (*Server, error) {
+	handler, err := NewHandler(spec)
+	if err != nil {
+		return nil, err
+	}
 	// resolveRefs(spec)
+	ctx := context.WithValue(context.Background(), SpecKey, spec)
 	return &Server{
 		Server: http.Server{
-			Addr: fmt.Sprintf(":%s", port),
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				mux.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), SpecKey, spec)))
-			}),
+			Addr:    fmt.Sprintf(":%s", port),
+			Handler: handler,
+			BaseContext: func(l net.Listener) context.Context {
+				return ctx
+			},
 		},
 		Spec: *spec,
 	}, nil

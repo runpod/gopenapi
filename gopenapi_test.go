@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/MarceloPetrucio/go-scalar-api-reference"
-	"github.com/gabewillen/gopenapi"
+	"github.com/runpod/gopenapi"
 )
 
 type User struct {
