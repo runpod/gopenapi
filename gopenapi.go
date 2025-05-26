@@ -472,7 +472,7 @@ func handle(spec *Spec, operation *Operation) (http.HandlerFunc, error) {
 	}, nil
 }
 
-func NewHandler(spec *Spec) (http.Handler, error) {
+func NewServerMux(spec *Spec) (http.Handler, error) {
 	mux := http.NewServeMux()
 	hosts := make([]string, len(spec.Servers))
 	if spec.SecurityMiddleware == nil {
@@ -517,7 +517,7 @@ func NewHandler(spec *Spec) (http.Handler, error) {
 }
 
 func NewServer(spec *Spec, port string) (*Server, error) {
-	handler, err := NewHandler(spec)
+	handler, err := NewServerMux(spec)
 	if err != nil {
 		return nil, err
 	}
