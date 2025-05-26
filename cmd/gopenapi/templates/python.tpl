@@ -89,7 +89,7 @@ class {{.StructName}}Response:
 {{end}}
 
 
-class {{.PackageName | title}}Client:
+class {{.ClientName}}Client:
     """HTTP client for the API"""
     
     def __init__(self, base_url: str):

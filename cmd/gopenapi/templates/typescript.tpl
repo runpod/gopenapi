@@ -60,7 +60,7 @@ export class ApiError extends Error {
   }
 }
 
-export class {{ .PackageName | title }}Client {
+export class {{ .ClientName }}Client {
   private baseURL: string;
   private headers: Record<string, string>;
   private timeout: number;

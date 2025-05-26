@@ -75,6 +75,24 @@ var ExampleSpec = gopenapi.Spec{
 				}),
 			},
 		},
+		"/test-schema": gopenapi.Path{
+			Get: &gopenapi.Operation{
+				OperationId: "testSchema",
+				Summary:     "Test schema",
+				Description: "Test schema",
+				Responses: gopenapi.Responses{
+					200: {
+						Description: "OK",
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[gopenapi.Schema]()},
+							},
+						},
+					},
+				},
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+			},
+		},
 		"/users": gopenapi.Path{
 			Get: &gopenapi.Operation{
 				OperationId: "listAllUsers",
