@@ -936,7 +936,7 @@ func resolveTypeFromAST(expr ast.Expr, pkg *packages.Package) reflect.Type {
 
 	if typeInfo := pkg.TypesInfo.TypeOf(expr); typeInfo != nil {
 		// Use the improved type resolution function
-		return createReflectTypeFromGoTypes(typeInfo, pkg)
+		return createReflectTypeFromGoTypes(typeInfo)
 	}
 
 	return nil
@@ -956,7 +956,7 @@ func lookupTypeInPackage(ident *ast.Ident, pkg *packages.Package) reflect.Type {
 
 	// Get the underlying type
 	if typeObj, ok := obj.(*types.TypeName); ok {
-		return createReflectTypeFromGoTypes(typeObj.Type(), pkg)
+		return createReflectTypeFromGoTypes(typeObj.Type())
 	}
 
 	return nil
@@ -976,7 +976,7 @@ func lookupImportedType(selector *ast.SelectorExpr, pkg *packages.Package) refle
 
 	// Get the underlying type
 	if typeObj, ok := obj.(*types.TypeName); ok {
-		return createReflectTypeFromGoTypes(typeObj.Type(), pkg)
+		return createReflectTypeFromGoTypes(typeObj.Type())
 	}
 
 	return nil
@@ -998,7 +998,7 @@ func getTypeNameFromExpr(expr ast.Expr) string {
 }
 
 // createReflectTypeFromGoTypes creates a reflect.Type from go/types.Type
-func createReflectTypeFromGoTypes(t types.Type, pkg *packages.Package) reflect.Type {
+func createReflectTypeFromGoTypes(t types.Type) reflect.Type {
 	switch typ := t.(type) {
 	case *types.Named:
 		// For named types, check the underlying type
@@ -1006,7 +1006,7 @@ func createReflectTypeFromGoTypes(t types.Type, pkg *packages.Package) reflect.T
 		switch underlyingType := underlying.(type) {
 		case *types.Struct:
 			// Complex struct type - create a struct type
-			return createStructType(underlyingType, pkg)
+			return createStructType(underlyingType)
 		case *types.Basic:
 			// Named type with primitive underlying type (like type ID string)
 			// Return the underlying primitive type
@@ -1016,14 +1016,14 @@ func createReflectTypeFromGoTypes(t types.Type, pkg *packages.Package) reflect.T
 			return getReflectTypeFromGoTypesType(underlying)
 		}
 	case *types.Struct:
-		return createStructType(typ, pkg)
+		return createStructType(typ)
 	default:
 		return getReflectTypeFromGoTypesType(t)
 	}
 }
 
 // createStructType creates a reflect.Type for a struct from go/types.Struct
-func createStructType(structType *types.Struct, pkg *packages.Package) reflect.Type {
+func createStructType(structType *types.Struct) reflect.Type {
 	numFields := structType.NumFields()
 	fields := make([]reflect.StructField, numFields)
 
@@ -1279,7 +1279,7 @@ func GenerateClientToWriter(spec *gopenapi.Spec, writer io.Writer, packageName, 
 	}
 
 	// Generate template data
-	templateData := generateTemplateData(spec, packageName, language)
+	templateData := generateTemplateData(spec, packageName)
 
 	// Execute template
 	if err := tmpl.Execute(writer, templateData); err != nil {
@@ -1399,7 +1399,7 @@ func toTypeScriptType(goType string) string {
 	}
 }
 
-func generateTemplateData(spec *gopenapi.Spec, packageName string, language string) *TemplateData {
+func generateTemplateData(spec *gopenapi.Spec, packageName string) *TemplateData {
 	var operations []OperationData
 
 	for path, pathItem := range spec.Paths {

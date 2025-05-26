@@ -428,7 +428,7 @@ func TestGenerateConvertToString(t *testing.T) {
 }
 
 func TestGenerateTemplateData(t *testing.T) {
-	templateData := generateTemplateData(&testSpec, "testclient", "go")
+	templateData := generateTemplateData(&testSpec, "testclient")
 
 	if templateData.PackageName != "testclient" {
 		t.Errorf("Expected PackageName to be 'testclient', got %v", templateData.PackageName)
@@ -1441,7 +1441,7 @@ func TestParameterProcessingWithAliases(t *testing.T) {
 		},
 	}
 
-	templateData := generateTemplateData(spec, "client", "go")
+	templateData := generateTemplateData(spec, "client")
 
 	if len(templateData.Operations) != 1 {
 		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
@@ -1545,7 +1545,7 @@ func TestRequestBodyWithStruct(t *testing.T) {
 		},
 	}
 
-	templateData := generateTemplateData(spec, "client", "go")
+	templateData := generateTemplateData(spec, "client")
 
 	if len(templateData.Operations) != 1 {
 		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
