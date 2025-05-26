@@ -16,77 +16,90 @@ class APIError(Exception):
         super().__init__(f"API error {status_code}: {message}")
 
 
-{{range .Operations}}
-{{if .HasPathParams}}
+{{- range .Operations}}
+{{- if .HasPathParams}}
 @dataclass
 class {{.StructName}}PathParams:
     """Path parameters for {{.OperationId}}"""
-{{range .PathParams}}    {{.Name | snake_case}}: {{.GoType | python_type}}
-{{end}}
-{{end}}
+{{- range .PathParams}}
+    {{.Name | snake_case}}: {{.GoType | python_type}}
+{{- end}}
+{{- end}}
 
-{{if .HasQueryParams}}
+{{- if .HasQueryParams}}
 @dataclass
 class {{.StructName}}QueryParams:
     """Query parameters for {{.OperationId}}"""
-{{range .QueryParams}}    {{.Name | snake_case}}: Optional[{{.GoType | python_type}}] = None
-{{end}}
+{{- range .QueryParams}}
+    {{.Name | snake_case}}: Optional[{{.GoType | python_type}}] = None
+{{- end}}
     
     def to_dict(self) -> Dict[str, str]:
         """Convert to dictionary for requests"""
         params = {}
-{{range .QueryParams}}        if self.{{.Name | snake_case}} is not None:
+{{- range .QueryParams}}
+        if self.{{.Name | snake_case}} is not None:
             params["{{.Name}}"] = str(self.{{.Name | snake_case}})
-{{end}}        return params
-{{end}}
+{{- end}}
+        return params
+{{- end}}
 
-{{if .HasHeaderParams}}
+{{- if .HasHeaderParams}}
 @dataclass
 class {{.StructName}}HeaderParams:
     """Header parameters for {{.OperationId}}"""
-{{range .HeaderParams}}    {{.Name | snake_case}}: Optional[{{.GoType | python_type}}] = None
-{{end}}
+{{- range .HeaderParams}}
+    {{.Name | snake_case}}: Optional[{{.GoType | python_type}}] = None
+{{- end}}
     
     def to_dict(self) -> Dict[str, str]:
         """Convert to dictionary for requests"""
         headers = {}
-{{range .HeaderParams}}        if self.{{.Name | snake_case}} is not None:
+{{- range .HeaderParams}}
+        if self.{{.Name | snake_case}} is not None:
             headers["{{.Name}}"] = str(self.{{.Name | snake_case}})
-{{end}}        return headers
-{{end}}
+{{- end}}
+        return headers
+{{- end}}
 
-{{if .HasRequestBody}}
+{{- if .HasRequestBody}}
 @dataclass
 class {{.StructName}}RequestBody:
     """Request body for {{.OperationId}}"""
-{{range .RequestBodyFields}}    {{.Name | snake_case}}: {{.GoType | python_type}}
-{{end}}
+{{- range .RequestBodyFields}}
+    {{.Name | snake_case}}: {{.GoType | python_type}}
+{{- end}}
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
         data = asdict(self)
         # Convert snake_case field names back to original JSON field names
         return {
-{{range .RequestBodyFields}}            "{{.Name}}": data["{{.Name | snake_case}}"],
-{{end}}        }
-{{end}}
+{{- range .RequestBodyFields}}
+            "{{.Name}}": data["{{.Name | snake_case}}"],
+{{- end}}
+        }
+{{- end}}
 
-{{if .HasResponseBody}}
+{{- if .HasResponseBody}}
 @dataclass
 class {{.StructName}}Response:
     """Response from {{.OperationId}}"""
-{{range .ResponseFields}}    {{.Name | snake_case}}: Optional[{{.GoType | python_type}}] = None
-{{end}}
+{{- range .ResponseFields}}
+    {{.Name | snake_case}}: Optional[{{.GoType | python_type}}] = None
+{{- end}}
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "{{.StructName}}Response":
         """Create instance from dictionary"""
         return cls(
-{{range .ResponseFields}}            {{.Name | snake_case}}=data.get("{{.Name}}"),
-{{end}}        )
-{{end}}
+{{- range .ResponseFields}}
+            {{.Name | snake_case}}=data.get("{{.Name}}"),
+{{- end}}
+        )
+{{- end}}
 
-{{end}}
+{{- end}}
 
 
 class {{.ClientName}}Client:
@@ -128,32 +141,38 @@ class {{.ClientName}}Client:
         
         return response
 
-{{range .Operations}}
-    def {{.OperationId | snake_case}}(self{{if .HasPathParams}}, path: {{.StructName}}PathParams{{end}}{{if .HasQueryParams}}, query: Optional[{{.StructName}}QueryParams] = None{{end}}{{if .HasHeaderParams}}, headers: Optional[{{.StructName}}HeaderParams] = None{{end}}{{if .HasRequestBody}}, body: Optional[{{.StructName}}RequestBody] = None{{end}}) -> {{if .HasResponseBody}}{{.StructName}}Response{{else}}str{{end}}:
+{{- range .Operations}}
+    def {{.OperationId | snake_case}}(self{{- if .HasPathParams}}, path: {{.StructName}}PathParams{{- end}}{{- if .HasQueryParams}}, query: Optional[{{.StructName}}QueryParams] = None{{- end}}{{- if .HasHeaderParams}}, headers: Optional[{{.StructName}}HeaderParams] = None{{- end}}{{- if .HasRequestBody}}, body: Optional[{{.StructName}}RequestBody] = None{{- end}}) -> {{- if .HasResponseBody}}{{.StructName}}Response{{- else}}str{{- end}}:
         """{{.Description}}"""
         
         # Build path
         path_str = "{{.Path}}"
-{{if .HasPathParams}}{{range .PathParams}}        path_str = path_str.replace("{{.PathPattern}}", str(path.{{.Name | snake_case}}))
-{{end}}{{end}}
+{{- if .HasPathParams}}
+{{- range .PathParams}}
+        path_str = path_str.replace("{{.PathPattern}}", str(path.{{.Name | snake_case}}))
+{{- end}}
+{{- end}}
         
         # Build query parameters
         params = {}
-{{if .HasQueryParams}}        if query:
+{{- if .HasQueryParams}}
+        if query:
             params.update(query.to_dict())
-{{end}}
+{{- end}}
         
         # Build headers
         request_headers = {}
-{{if .HasHeaderParams}}        if headers:
+{{- if .HasHeaderParams}}
+        if headers:
             request_headers.update(headers.to_dict())
-{{end}}
+{{- end}}
         
         # Build request body
         json_data = None
-{{if .HasRequestBody}}        if body:
+{{- if .HasRequestBody}}
+        if body:
             json_data = body.to_dict()
-{{end}}
+{{- end}}
         
         response = self._make_request(
             method="{{.Method}}",
@@ -163,10 +182,12 @@ class {{.ClientName}}Client:
             json_data=json_data
         )
         
-{{if .HasResponseBody}}        if response.content:
+{{- if .HasResponseBody}}
+        if response.content:
             return {{.StructName}}Response.from_dict(response.json())
         return {{.StructName}}Response.from_dict({})
-{{else}}        return response.text
-{{end}}
+{{- else}}
+        return response.text
+{{- end}}
 
-{{end}} 
+{{- end}} 

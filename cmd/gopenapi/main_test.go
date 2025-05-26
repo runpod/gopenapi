@@ -1134,3 +1134,474 @@ func TestGoTypeToOpenAPIType(t *testing.T) {
 		})
 	}
 }
+
+// Test types for alias resolution
+type UserIDAlias string
+type StatusAlias int
+type ScoreAlias float64
+type IsActiveAlias bool
+type TagsAlias []string
+
+func TestTypeToGoTypeWithAliases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    reflect.Type
+		expected string
+	}{
+		// Basic types
+		{"string", reflect.TypeOf(""), "string"},
+		{"int", reflect.TypeOf(0), "int"},
+		{"int64", reflect.TypeOf(int64(0)), "int"},
+		{"float64", reflect.TypeOf(0.0), "float64"},
+		{"bool", reflect.TypeOf(false), "bool"},
+		{"slice", reflect.TypeOf([]string{}), "[]string"},
+		{"pointer", reflect.TypeOf((*string)(nil)), "*string"},
+
+		// Named types (aliases)
+		{"UserID alias", reflect.TypeOf(UserIDAlias("")), "string"},
+		{"Status alias", reflect.TypeOf(StatusAlias(0)), "int"},
+		{"Score alias", reflect.TypeOf(ScoreAlias(0.0)), "float64"},
+		{"IsActive alias", reflect.TypeOf(IsActiveAlias(false)), "bool"},
+		{"Tags alias", reflect.TypeOf(TagsAlias{}), "[]string"},
+
+		// Struct types
+		{"struct", reflect.TypeOf(struct{ Name string }{}), "interface{}"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := typeToGoType(tt.input)
+			if result != tt.expected {
+				t.Errorf("typeToGoType(%v) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSchemaToGoTypeWithAliases(t *testing.T) {
+	tests := []struct {
+		name     string
+		schema   gopenapi.Schema
+		expected string
+	}{
+		{
+			name:     "gopenapi.String",
+			schema:   gopenapi.Schema{Type: gopenapi.String},
+			expected: "string",
+		},
+		{
+			name:     "gopenapi.Integer",
+			schema:   gopenapi.Schema{Type: gopenapi.Integer},
+			expected: "int",
+		},
+		{
+			name:     "gopenapi.Number",
+			schema:   gopenapi.Schema{Type: gopenapi.Number},
+			expected: "float64",
+		},
+		{
+			name:     "gopenapi.Boolean",
+			schema:   gopenapi.Schema{Type: gopenapi.Boolean},
+			expected: "bool",
+		},
+		{
+			name:     "UserID alias",
+			schema:   gopenapi.Schema{Type: reflect.TypeOf(UserIDAlias(""))},
+			expected: "string",
+		},
+		{
+			name:     "Status alias",
+			schema:   gopenapi.Schema{Type: reflect.TypeOf(StatusAlias(0))},
+			expected: "int",
+		},
+		{
+			name:     "Score alias",
+			schema:   gopenapi.Schema{Type: reflect.TypeOf(ScoreAlias(0.0))},
+			expected: "float64",
+		},
+		{
+			name:     "IsActive alias",
+			schema:   gopenapi.Schema{Type: reflect.TypeOf(IsActiveAlias(false))},
+			expected: "bool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := schemaToGoType(tt.schema)
+			if result != tt.expected {
+				t.Errorf("schemaToGoType(%v) = %q, want %q", tt.schema.Type, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGenerateConvertToStringWithAliases(t *testing.T) {
+	tests := []struct {
+		name     string
+		goName   string
+		goType   string
+		expected string
+	}{
+		{
+			name:     "string type",
+			goName:   "UserID",
+			goType:   "string",
+			expected: "opts.Path.UserID",
+		},
+		{
+			name:     "int type",
+			goName:   "Status",
+			goType:   "int",
+			expected: "strconv.Itoa(opts.Path.Status)",
+		},
+		{
+			name:     "float64 type",
+			goName:   "Score",
+			goType:   "float64",
+			expected: "strconv.FormatFloat(opts.Path.Score, 'f', -1, 64)",
+		},
+		{
+			name:     "bool type",
+			goName:   "IsActive",
+			goType:   "bool",
+			expected: "strconv.FormatBool(opts.Path.IsActive)",
+		},
+		{
+			name:     "interface{} type",
+			goName:   "Data",
+			goType:   "interface{}",
+			expected: "fmt.Sprintf(\"%v\", opts.Path.Data)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := generateConvertToString(tt.goName, tt.goType)
+			if result != tt.expected {
+				t.Errorf("generateConvertToString(%q, %q) = %q, want %q", tt.goName, tt.goType, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGenerateAddToParams(t *testing.T) {
+	tests := []struct {
+		name      string
+		goName    string
+		goType    string
+		paramName string
+		expected  string
+	}{
+		{
+			name:      "string type",
+			goName:    "UserID",
+			goType:    "string",
+			paramName: "user_id",
+			expected:  "if opts.Query.UserID != \"\" {\n\t\tparams.Add(\"user_id\", opts.Query.UserID)\n\t}",
+		},
+		{
+			name:      "int type",
+			goName:    "Status",
+			goType:    "int",
+			paramName: "status",
+			expected:  "if opts.Query.Status != 0 {\n\t\tparams.Add(\"status\", strconv.Itoa(opts.Query.Status))\n\t}",
+		},
+		{
+			name:      "float64 type",
+			goName:    "Score",
+			goType:    "float64",
+			paramName: "score",
+			expected:  "if opts.Query.Score != 0 {\n\t\tparams.Add(\"score\", strconv.FormatFloat(opts.Query.Score, 'f', -1, 64))\n\t}",
+		},
+		{
+			name:      "bool type",
+			goName:    "IsActive",
+			goType:    "bool",
+			paramName: "is_active",
+			expected:  "params.Add(\"is_active\", strconv.FormatBool(opts.Query.IsActive))",
+		},
+		{
+			name:      "interface{} type",
+			goName:    "Data",
+			goType:    "interface{}",
+			paramName: "data",
+			expected:  "if opts.Query.Data != nil {\n\t\tparams.Add(\"data\", fmt.Sprintf(\"%v\", opts.Query.Data))\n\t}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := generateAddToParams(tt.goName, tt.goType, tt.paramName)
+			if result != tt.expected {
+				t.Errorf("generateAddToParams(%q, %q, %q) = %q, want %q", tt.goName, tt.goType, tt.paramName, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGenerateSetHeader(t *testing.T) {
+	tests := []struct {
+		name       string
+		goName     string
+		goType     string
+		headerName string
+		expected   string
+	}{
+		{
+			name:       "string type",
+			goName:     "UserID",
+			goType:     "string",
+			headerName: "X-User-ID",
+			expected:   "if opts.Headers.UserID != \"\" {\n\t\treq.Header.Set(\"X-User-ID\", opts.Headers.UserID)\n\t}",
+		},
+		{
+			name:       "int type",
+			goName:     "Status",
+			goType:     "int",
+			headerName: "X-Status",
+			expected:   "if opts.Headers.Status != 0 {\n\t\treq.Header.Set(\"X-Status\", strconv.Itoa(opts.Headers.Status))\n\t}",
+		},
+		{
+			name:       "float64 type",
+			goName:     "Score",
+			goType:     "float64",
+			headerName: "X-Score",
+			expected:   "if opts.Headers.Score != 0 {\n\t\treq.Header.Set(\"X-Score\", strconv.FormatFloat(opts.Headers.Score, 'f', -1, 64))\n\t}",
+		},
+		{
+			name:       "bool type",
+			goName:     "IsActive",
+			goType:     "bool",
+			headerName: "X-Is-Active",
+			expected:   "req.Header.Set(\"X-Is-Active\", strconv.FormatBool(opts.Headers.IsActive))",
+		},
+		{
+			name:       "interface{} type",
+			goName:     "Data",
+			goType:     "interface{}",
+			headerName: "X-Data",
+			expected:   "if opts.Headers.Data != nil {\n\t\treq.Header.Set(\"X-Data\", fmt.Sprintf(\"%v\", opts.Headers.Data))\n\t}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := generateSetHeader(tt.goName, tt.goType, tt.headerName)
+			if result != tt.expected {
+				t.Errorf("generateSetHeader(%q, %q, %q) = %q, want %q", tt.goName, tt.goType, tt.headerName, result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test integration: full parameter processing with aliases
+func TestParameterProcessingWithAliases(t *testing.T) {
+	// Create a mock spec with various parameter types using aliases
+	spec := &gopenapi.Spec{
+		Paths: gopenapi.Paths{
+			"/users/{user_id}": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "getUser",
+					Description: "Get user by ID",
+					Parameters: gopenapi.Parameters{
+						{
+							Name:   "user_id",
+							In:     gopenapi.InPath,
+							Schema: gopenapi.Schema{Type: reflect.TypeOf(UserIDAlias(""))},
+						},
+						{
+							Name:   "status",
+							In:     gopenapi.InQuery,
+							Schema: gopenapi.Schema{Type: reflect.TypeOf(StatusAlias(0))},
+						},
+						{
+							Name:   "score",
+							In:     gopenapi.InHeader,
+							Schema: gopenapi.Schema{Type: reflect.TypeOf(ScoreAlias(0.0))},
+						},
+						{
+							Name:   "is_active",
+							In:     gopenapi.InQuery,
+							Schema: gopenapi.Schema{Type: reflect.TypeOf(IsActiveAlias(false))},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: reflect.TypeOf(UserIDAlias(""))},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	templateData := generateTemplateData(spec, "client", "go")
+
+	if len(templateData.Operations) != 1 {
+		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+	}
+
+	op := templateData.Operations[0]
+
+	// Test path parameters
+	if !op.HasPathParams || len(op.PathParams) != 1 {
+		t.Errorf("Expected 1 path parameter, got %d", len(op.PathParams))
+	} else {
+		param := op.PathParams[0]
+		if param.GoType != "string" {
+			t.Errorf("Expected path parameter type 'string', got %q", param.GoType)
+		}
+		if param.ConvertToString != "opts.Path.UserId" {
+			t.Errorf("Expected ConvertToString 'opts.Path.UserId', got %q", param.ConvertToString)
+		}
+	}
+
+	// Test query parameters
+	if !op.HasQueryParams || len(op.QueryParams) != 2 {
+		t.Errorf("Expected 2 query parameters, got %d", len(op.QueryParams))
+	} else {
+		// Check status parameter (int alias)
+		statusParam := findParamByName(op.QueryParams, "status")
+		if statusParam == nil {
+			t.Error("Status parameter not found")
+		} else if statusParam.GoType != "int" {
+			t.Errorf("Expected status parameter type 'int', got %q", statusParam.GoType)
+		}
+
+		// Check is_active parameter (bool alias)
+		activeParam := findParamByName(op.QueryParams, "is_active")
+		if activeParam == nil {
+			t.Error("IsActive parameter not found")
+		} else if activeParam.GoType != "bool" {
+			t.Errorf("Expected is_active parameter type 'bool', got %q", activeParam.GoType)
+		}
+	}
+
+	// Test header parameters
+	if !op.HasHeaderParams || len(op.HeaderParams) != 1 {
+		t.Errorf("Expected 1 header parameter, got %d", len(op.HeaderParams))
+	} else {
+		param := op.HeaderParams[0]
+		if param.GoType != "float64" {
+			t.Errorf("Expected header parameter type 'float64', got %q", param.GoType)
+		}
+	}
+
+	// Test response type (should be resolved to string for UserID alias)
+	if op.ResponseType != "string" {
+		t.Errorf("Expected response type 'string', got %q", op.ResponseType)
+	}
+}
+
+// Helper function to find a parameter by name
+func findParamByName(params []ParamData, name string) *ParamData {
+	for _, param := range params {
+		if param.Name == name {
+			return &param
+		}
+	}
+	return nil
+}
+
+// Test that struct types in request body are handled correctly
+func TestRequestBodyWithStruct(t *testing.T) {
+	type User struct {
+		ID   UserIDAlias `json:"id"`
+		Name string      `json:"name"`
+	}
+
+	spec := &gopenapi.Spec{
+		Paths: gopenapi.Paths{
+			"/users": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createUser",
+					Description: "Create a new user",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: reflect.TypeOf(User{})},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "Created",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: reflect.TypeOf(User{})},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	templateData := generateTemplateData(spec, "client", "go")
+
+	if len(templateData.Operations) != 1 {
+		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+	}
+
+	op := templateData.Operations[0]
+
+	// Test request body
+	if !op.HasRequestBody {
+		t.Error("Expected operation to have request body")
+	}
+
+	if len(op.RequestBodyFields) != 2 {
+		t.Errorf("Expected 2 request body fields, got %d", len(op.RequestBodyFields))
+	} else {
+		// Check ID field (should resolve UserID alias to string)
+		idField := findFieldByName(op.RequestBodyFields, "id")
+		if idField == nil {
+			t.Error("ID field not found in request body")
+		} else if idField.GoType != "string" {
+			t.Errorf("Expected ID field type 'string', got %q", idField.GoType)
+		}
+
+		// Check Name field
+		nameField := findFieldByName(op.RequestBodyFields, "name")
+		if nameField == nil {
+			t.Error("Name field not found in request body")
+		} else if nameField.GoType != "string" {
+			t.Errorf("Expected Name field type 'string', got %q", nameField.GoType)
+		}
+	}
+
+	// Test response body
+	if !op.HasResponseBody {
+		t.Error("Expected operation to have response body")
+	}
+
+	if len(op.ResponseFields) != 2 {
+		t.Errorf("Expected 2 response fields, got %d", len(op.ResponseFields))
+	} else {
+		// Check ID field (should resolve UserID alias to string)
+		idField := findFieldByName(op.ResponseFields, "id")
+		if idField == nil {
+			t.Error("ID field not found in response body")
+		} else if idField.GoType != "string" {
+			t.Errorf("Expected ID field type 'string', got %q", idField.GoType)
+		}
+	}
+}
+
+// Helper function to find a field by name
+func findFieldByName(fields []FieldData, name string) *FieldData {
+	for _, field := range fields {
+		if field.Name == name {
+			return &field
+		}
+	}
+	return nil
+}

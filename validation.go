@@ -141,6 +141,9 @@ func (v *DefaultValidationMiddleware) ValidateRequest(operation *Operation, r *h
 		// We will skip calling ValidateBody here to avoid consuming the body twice if Apply is used.
 		// The Apply method should chain these validations appropriately.
 		// For now, this method can return a struct of validated parts or just nil,error.
+
+		// TODO: Implement proper request body validation without consuming the body
+		// This would require buffering the body or using a different validation approach
 	}
 
 	return nil, nil

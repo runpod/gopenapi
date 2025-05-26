@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"go/types"
 	"io"
@@ -153,7 +152,10 @@ Examples:
 `)
 	}
 
-	fs.Parse(os.Args[3:])
+	if err := fs.Parse(os.Args[3:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	if *help {
 		fs.Usage()
@@ -226,7 +228,10 @@ Examples:
 `)
 	}
 
-	fs.Parse(os.Args[3:])
+	if err := fs.Parse(os.Args[3:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
+		os.Exit(1)
+	}
 
 	if *help {
 		fs.Usage()
@@ -390,17 +395,52 @@ func parseSpecFromASTWithTypes(lit *ast.CompositeLit, pkg *packages.Package) (go
 					}
 				case "Info":
 					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						info, err := parseInfoFromAST(compLit, pkg.Fset, nil)
-						if err != nil {
-							return spec, fmt.Errorf("failed to parse Info: %w", err)
+						info := gopenapi.Info{}
+						for _, infoElt := range compLit.Elts {
+							if kv, ok := infoElt.(*ast.KeyValueExpr); ok {
+								if ident, ok := kv.Key.(*ast.Ident); ok {
+									if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
+										value := strings.Trim(basicLit.Value, `"`)
+										switch ident.Name {
+										case "Title":
+											info.Title = value
+										case "Description":
+											info.Description = value
+										case "Version":
+											info.Version = value
+										}
+									}
+								}
+							}
 						}
 						spec.Info = info
 					}
 				case "Servers":
 					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						servers, err := parseServersFromAST(compLit, pkg.Fset, nil)
-						if err != nil {
-							return spec, fmt.Errorf("failed to parse Servers: %w", err)
+						var servers gopenapi.Servers
+						for _, serverElt := range compLit.Elts {
+							if compLit, ok := serverElt.(*ast.CompositeLit); ok {
+								server := struct {
+									URL         string `json:"url"`
+									Description string `json:"description"`
+								}{}
+								for _, serverFieldElt := range compLit.Elts {
+									if kv, ok := serverFieldElt.(*ast.KeyValueExpr); ok {
+										if ident, ok := kv.Key.(*ast.Ident); ok {
+											if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
+												value := strings.Trim(basicLit.Value, `"`)
+												switch ident.Name {
+												case "URL":
+													server.URL = value
+												case "Description":
+													server.Description = value
+												}
+											}
+										}
+									}
+								}
+								servers = append(servers, server)
+							}
 						}
 						spec.Servers = servers
 					}
@@ -843,8 +883,22 @@ func parseSchemaFromASTWithTypes(lit *ast.CompositeLit, pkg *packages.Package) (
 						schema.Type = gopenapi.Array
 					}
 				} else if callExpr, ok := kv.Value.(*ast.CallExpr); ok {
-					// Handle gopenapi.Object[Type]() calls with type resolution
-					if indexExpr, ok := callExpr.Fun.(*ast.IndexExpr); ok {
+					// Handle different types of call expressions
+					if selectorExpr, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
+						if selectorExpr.Sel.Name == "TypeOf" {
+							// This is a reflect.TypeOf() call
+							if len(callExpr.Args) > 0 {
+								// Get the type from the argument to TypeOf
+								resolvedType := resolveTypeFromAST(callExpr.Args[0], pkg)
+								if resolvedType != nil {
+									schema.Type = resolvedType
+								} else {
+									fmt.Fprintf(os.Stderr, "Warning: Could not resolve type for reflect.TypeOf(), falling back to interface{}\n")
+									schema.Type = reflect.TypeOf((*interface{})(nil)).Elem()
+								}
+							}
+						}
+					} else if indexExpr, ok := callExpr.Fun.(*ast.IndexExpr); ok {
 						if selectorExpr, ok := indexExpr.X.(*ast.SelectorExpr); ok && selectorExpr.Sel.Name == "Object" {
 							// This is a generic call like gopenapi.Object[SomeType]()
 							// Handle both local types (ident) and imported types (selector)
@@ -881,35 +935,11 @@ func resolveTypeFromAST(expr ast.Expr, pkg *packages.Package) reflect.Type {
 	}
 
 	if typeInfo := pkg.TypesInfo.TypeOf(expr); typeInfo != nil {
-		// Convert types.Type to reflect.Type
-		// This is a simplified conversion - in practice you might need more sophisticated handling
-		switch typeInfo.String() {
-		case "string":
-			return reflect.TypeOf("")
-		case "int":
-			return reflect.TypeOf(0)
-		case "float64":
-			return reflect.TypeOf(0.0)
-		case "bool":
-			return reflect.TypeOf(false)
-		default:
-			// For complex types, try to get the underlying type
-			// This is where the real type resolution happens
-			if typeInfo.Underlying() != nil {
-				return getReflectTypeFromGoType(typeInfo)
-			}
-		}
+		// Use the improved type resolution function
+		return createReflectTypeFromGoTypes(typeInfo, pkg)
 	}
 
 	return nil
-}
-
-// getReflectTypeFromGoType converts a go/types.Type to reflect.Type
-func getReflectTypeFromGoType(t interface{}) reflect.Type {
-	// This is a simplified implementation
-	// In practice, you'd need to handle all the different types.Type variants
-	// For now, return interface{} as a fallback
-	return reflect.TypeOf((*interface{})(nil)).Elem()
 }
 
 // lookupTypeInPackage looks up a type by AST identifier and returns a reflect.Type
@@ -997,7 +1027,7 @@ func createStructType(structType *types.Struct, pkg *packages.Package) reflect.T
 	numFields := structType.NumFields()
 	fields := make([]reflect.StructField, numFields)
 
-	for i := 0; i < numFields; i++ {
+	for i := range numFields {
 		field := structType.Field(i)
 		tag := ""
 		if structType.Tag(i) != "" {
@@ -1057,7 +1087,7 @@ func getReflectTypeFromGoTypesType(t types.Type) reflect.Type {
 		return reflect.SliceOf(elemType)
 	case *types.Pointer:
 		elemType := getReflectTypeFromGoTypesType(typ.Elem())
-		return reflect.PtrTo(elemType)
+		return reflect.PointerTo(elemType)
 	default:
 		return reflect.TypeOf((*interface{})(nil)).Elem()
 	}
@@ -1193,508 +1223,6 @@ func parseRequestBodyFromASTWithTypes(lit *ast.CompositeLit, pkg *packages.Packa
 	return requestBody, nil
 }
 
-// parseSpecViaAST parses the Go file using AST and extracts the gopenapi.Spec
-func parseSpecViaAST(filename, varName string) (gopenapi.Spec, error) {
-	// Parse the Go file
-	fset := token.NewFileSet()
-	src, err := os.ReadFile(filename)
-	if err != nil {
-		return gopenapi.Spec{}, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	node, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
-	if err != nil {
-		return gopenapi.Spec{}, fmt.Errorf("failed to parse Go file: %w", err)
-	}
-
-	// Find the variable declaration and extract its value
-	var specLiteral *ast.CompositeLit
-	found := false
-
-	ast.Inspect(node, func(n ast.Node) bool {
-		if genDecl, ok := n.(*ast.GenDecl); ok && genDecl.Tok == token.VAR {
-			for _, spec := range genDecl.Specs {
-				if valueSpec, ok := spec.(*ast.ValueSpec); ok {
-					for i, name := range valueSpec.Names {
-						if name.Name == varName {
-							if i < len(valueSpec.Values) {
-								if compLit, ok := valueSpec.Values[i].(*ast.CompositeLit); ok {
-									specLiteral = compLit
-									found = true
-									return false
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		return true
-	})
-
-	if !found {
-		return gopenapi.Spec{}, fmt.Errorf("variable %s not found in file %s", varName, filename)
-	}
-
-	if specLiteral == nil {
-		return gopenapi.Spec{}, fmt.Errorf("variable %s is not a composite literal", varName)
-	}
-
-	// Parse the composite literal into a gopenapi.Spec
-	spec, err := parseSpecFromAST(specLiteral, fset, src)
-	if err != nil {
-		return gopenapi.Spec{}, fmt.Errorf("failed to parse spec from AST: %w", err)
-	}
-
-	return spec, nil
-}
-
-// parseSpecFromAST converts an AST composite literal to a gopenapi.Spec
-func parseSpecFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Spec, error) {
-	spec := gopenapi.Spec{}
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok {
-				switch ident.Name {
-				case "OpenAPI":
-					if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
-						spec.OpenAPI = strings.Trim(basicLit.Value, `"`)
-					}
-				case "Info":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						info, err := parseInfoFromAST(compLit, fset, src)
-						if err != nil {
-							return spec, fmt.Errorf("failed to parse Info: %w", err)
-						}
-						spec.Info = info
-					}
-				case "Servers":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						servers, err := parseServersFromAST(compLit, fset, src)
-						if err != nil {
-							return spec, fmt.Errorf("failed to parse Servers: %w", err)
-						}
-						spec.Servers = servers
-					}
-				case "Paths":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						paths, err := parsePathsFromAST(compLit, fset, src)
-						if err != nil {
-							return spec, fmt.Errorf("failed to parse Paths: %w", err)
-						}
-						spec.Paths = paths
-					}
-				}
-			}
-		}
-	}
-
-	return spec, nil
-}
-
-// parseInfoFromAST parses gopenapi.Info from AST
-func parseInfoFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Info, error) {
-	info := gopenapi.Info{}
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok {
-				if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
-					value := strings.Trim(basicLit.Value, `"`)
-					switch ident.Name {
-					case "Title":
-						info.Title = value
-					case "Description":
-						info.Description = value
-					case "Version":
-						info.Version = value
-					}
-				}
-			}
-		}
-	}
-
-	return info, nil
-}
-
-// parseServersFromAST parses gopenapi.Servers from AST
-func parseServersFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Servers, error) {
-	var servers gopenapi.Servers
-
-	for _, elt := range lit.Elts {
-		if compLit, ok := elt.(*ast.CompositeLit); ok {
-			server := struct {
-				URL         string `json:"url"`
-				Description string `json:"description"`
-			}{}
-			for _, serverElt := range compLit.Elts {
-				if kv, ok := serverElt.(*ast.KeyValueExpr); ok {
-					if ident, ok := kv.Key.(*ast.Ident); ok {
-						if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
-							value := strings.Trim(basicLit.Value, `"`)
-							switch ident.Name {
-							case "URL":
-								server.URL = value
-							case "Description":
-								server.Description = value
-							}
-						}
-					}
-				}
-			}
-			servers = append(servers, server)
-		}
-	}
-
-	return servers, nil
-}
-
-// parsePathsFromAST parses gopenapi.Paths from AST
-func parsePathsFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Paths, error) {
-	paths := make(gopenapi.Paths)
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			// Get the path string
-			var pathStr string
-			if basicLit, ok := kv.Key.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
-				pathStr = strings.Trim(basicLit.Value, `"`)
-			}
-
-			// Parse the path item
-			if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-				pathItem, err := parsePathItemFromAST(compLit, fset, src)
-				if err != nil {
-					return paths, fmt.Errorf("failed to parse path item for %s: %w", pathStr, err)
-				}
-				paths[pathStr] = pathItem
-			}
-		}
-	}
-
-	return paths, nil
-}
-
-// parsePathItemFromAST parses gopenapi.Path from AST
-func parsePathItemFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Path, error) {
-	pathItem := gopenapi.Path{}
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok {
-				if unaryExpr, ok := kv.Value.(*ast.UnaryExpr); ok && unaryExpr.Op == token.AND {
-					if compLit, ok := unaryExpr.X.(*ast.CompositeLit); ok {
-						operation, err := parseOperationFromAST(compLit, fset, src)
-						if err != nil {
-							return pathItem, fmt.Errorf("failed to parse operation %s: %w", ident.Name, err)
-						}
-
-						switch strings.ToUpper(ident.Name) {
-						case "GET":
-							pathItem.Get = &operation
-						case "POST":
-							pathItem.Post = &operation
-						case "PUT":
-							pathItem.Put = &operation
-						case "DELETE":
-							pathItem.Delete = &operation
-						case "PATCH":
-							pathItem.Patch = &operation
-						case "HEAD":
-							pathItem.Head = &operation
-						case "OPTIONS":
-							pathItem.Options = &operation
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return pathItem, nil
-}
-
-// parseOperationFromAST parses gopenapi.Operation from AST
-func parseOperationFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Operation, error) {
-	operation := gopenapi.Operation{}
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok {
-				switch ident.Name {
-				case "OperationId", "Summary", "Description":
-					if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
-						value := strings.Trim(basicLit.Value, `"`)
-						switch ident.Name {
-						case "OperationId":
-							operation.OperationId = value
-						case "Summary":
-							operation.Summary = value
-						case "Description":
-							operation.Description = value
-						}
-					}
-				case "Parameters":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						params, err := parseParametersFromAST(compLit, fset, src)
-						if err != nil {
-							return operation, fmt.Errorf("failed to parse parameters: %w", err)
-						}
-						operation.Parameters = params
-					}
-				case "Responses":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						responses, err := parseResponsesFromAST(compLit, fset, src)
-						if err != nil {
-							return operation, fmt.Errorf("failed to parse responses: %w", err)
-						}
-						operation.Responses = responses
-					}
-				case "RequestBody":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						requestBody, err := parseRequestBodyFromAST(compLit, fset, src)
-						if err != nil {
-							return operation, fmt.Errorf("failed to parse request body: %w", err)
-						}
-						operation.RequestBody = requestBody
-					}
-				case "Handler":
-					// Skip handler parsing for now as it's complex and not needed for client generation
-					operation.Handler = nil
-				}
-			}
-		}
-	}
-
-	return operation, nil
-}
-
-// parseParametersFromAST parses gopenapi.Parameters from AST
-func parseParametersFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Parameters, error) {
-	var params gopenapi.Parameters
-
-	for _, elt := range lit.Elts {
-		if compLit, ok := elt.(*ast.CompositeLit); ok {
-			param := gopenapi.Parameter{}
-			for _, paramElt := range compLit.Elts {
-				if kv, ok := paramElt.(*ast.KeyValueExpr); ok {
-					if ident, ok := kv.Key.(*ast.Ident); ok {
-						switch ident.Name {
-						case "Name", "Description":
-							if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
-								value := strings.Trim(basicLit.Value, `"`)
-								switch ident.Name {
-								case "Name":
-									param.Name = value
-								case "Description":
-									param.Description = value
-								}
-							}
-						case "Required":
-							if ident, ok := kv.Value.(*ast.Ident); ok {
-								param.Required = ident.Name == "true"
-							}
-						case "In":
-							// Parse parameter location (path, query, header)
-							if selectorExpr, ok := kv.Value.(*ast.SelectorExpr); ok {
-								switch selectorExpr.Sel.Name {
-								case "InPath":
-									param.In = gopenapi.InPath
-								case "InQuery":
-									param.In = gopenapi.InQuery
-								case "InHeader":
-									param.In = gopenapi.InHeader
-								}
-							}
-						case "Schema":
-							// Parse schema - simplified for basic types
-							if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-								schema, err := parseSchemaFromAST(compLit, fset, src)
-								if err != nil {
-									return params, fmt.Errorf("failed to parse schema: %w", err)
-								}
-								param.Schema = schema
-							}
-						}
-					}
-				}
-			}
-			params = append(params, param)
-		}
-	}
-
-	return params, nil
-}
-
-// parseSchemaFromAST parses gopenapi.Schema from AST (simplified)
-func parseSchemaFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Schema, error) {
-	schema := gopenapi.Schema{}
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok && ident.Name == "Type" {
-				// Parse type - this is simplified and handles basic types
-				if selectorExpr, ok := kv.Value.(*ast.SelectorExpr); ok {
-					switch selectorExpr.Sel.Name {
-					case "String":
-						schema.Type = gopenapi.String
-					case "Integer":
-						schema.Type = gopenapi.Integer
-					case "Number":
-						schema.Type = gopenapi.Number
-					case "Boolean":
-						schema.Type = gopenapi.Boolean
-					case "Array":
-						schema.Type = gopenapi.Array
-					}
-				} else if callExpr, ok := kv.Value.(*ast.CallExpr); ok {
-					// Handle gopenapi.Object[Type]() calls
-					if selectorExpr, ok := callExpr.Fun.(*ast.SelectorExpr); ok {
-						if selectorExpr.Sel.Name == "Object" {
-							// For Object types, we'll set a placeholder type
-							// The actual type information would need more complex parsing
-							schema.Type = gopenapi.Object[interface{}]()
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return schema, nil
-}
-
-// parseResponsesFromAST parses gopenapi.Responses from AST
-func parseResponsesFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Responses, error) {
-	responses := make(gopenapi.Responses)
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			// Get status code
-			var statusCode int
-			if basicLit, ok := kv.Key.(*ast.BasicLit); ok && basicLit.Kind == token.INT {
-				if code, err := strconv.Atoi(basicLit.Value); err == nil {
-					statusCode = code
-				}
-			}
-
-			// Parse response
-			if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-				response, err := parseResponseFromAST(compLit, fset, src)
-				if err != nil {
-					return responses, fmt.Errorf("failed to parse response for status %d: %w", statusCode, err)
-				}
-				responses[statusCode] = response
-			}
-		}
-	}
-
-	return responses, nil
-}
-
-// parseResponseFromAST parses response struct from AST
-func parseResponseFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (struct {
-	Description string           `json:"description,omitempty"`
-	Content     gopenapi.Content `json:"content,omitempty"`
-}, error) {
-	response := struct {
-		Description string           `json:"description,omitempty"`
-		Content     gopenapi.Content `json:"content,omitempty"`
-	}{}
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok {
-				switch ident.Name {
-				case "Description":
-					if basicLit, ok := kv.Value.(*ast.BasicLit); ok && basicLit.Kind == token.STRING {
-						response.Description = strings.Trim(basicLit.Value, `"`)
-					}
-				case "Content":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						content, err := parseContentFromAST(compLit, fset, src)
-						if err != nil {
-							return response, fmt.Errorf("failed to parse content: %w", err)
-						}
-						response.Content = content
-					}
-				}
-			}
-		}
-	}
-
-	return response, nil
-}
-
-// parseContentFromAST parses gopenapi.Content from AST
-func parseContentFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.Content, error) {
-	content := make(gopenapi.Content)
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			// Get media type
-			var mediaType gopenapi.MediaType
-			if selectorExpr, ok := kv.Key.(*ast.SelectorExpr); ok {
-				if selectorExpr.Sel.Name == "ApplicationJSON" {
-					mediaType = gopenapi.ApplicationJSON
-				}
-			}
-
-			// Parse media type object
-			if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-				mediaTypeObj := struct {
-					Schema gopenapi.Schema `json:"schema,omitempty"`
-				}{}
-				for _, mediaElt := range compLit.Elts {
-					if kv, ok := mediaElt.(*ast.KeyValueExpr); ok {
-						if ident, ok := kv.Key.(*ast.Ident); ok && ident.Name == "Schema" {
-							if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-								schema, err := parseSchemaFromAST(compLit, fset, src)
-								if err != nil {
-									return content, fmt.Errorf("failed to parse schema: %w", err)
-								}
-								mediaTypeObj.Schema = schema
-							}
-						}
-					}
-				}
-				content[mediaType] = mediaTypeObj
-			}
-		}
-	}
-
-	return content, nil
-}
-
-// parseRequestBodyFromAST parses gopenapi.RequestBody from AST
-func parseRequestBodyFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []byte) (gopenapi.RequestBody, error) {
-	requestBody := gopenapi.RequestBody{}
-
-	for _, elt := range lit.Elts {
-		if kv, ok := elt.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok {
-				switch ident.Name {
-				case "Required":
-					if ident, ok := kv.Value.(*ast.Ident); ok {
-						requestBody.Required = ident.Name == "true"
-					}
-				case "Content":
-					if compLit, ok := kv.Value.(*ast.CompositeLit); ok {
-						content, err := parseContentFromAST(compLit, fset, src)
-						if err != nil {
-							return requestBody, fmt.Errorf("failed to parse content: %w", err)
-						}
-						requestBody.Content = content
-					}
-				}
-			}
-		}
-	}
-
-	return requestBody, nil
-}
-
 // generateClientToStdout generates a client for the specified language and outputs to stdout
 func generateClientToStdout(spec *gopenapi.Spec, language, packageName string) error {
 	// Determine template file based on language
@@ -1785,7 +1313,12 @@ func GenerateClient(spec *gopenapi.Spec, outputFile, packageName, templateFile, 
 // getTemplateFuncs returns template functions for the specified language
 func getTemplateFuncs(language string) template.FuncMap {
 	funcs := template.FuncMap{
-		"title": strings.Title,
+		"title": func(s string) string {
+			if len(s) == 0 {
+				return s
+			}
+			return strings.ToUpper(s[:1]) + s[1:]
+		},
 		"lower": strings.ToLower,
 		"upper": strings.ToUpper,
 	}
@@ -2119,10 +1652,6 @@ func schemaToGoType(schema gopenapi.Schema) string {
 	}
 }
 
-func schemaToFields(schema gopenapi.Schema) []FieldData {
-	return schemaToFieldsWithName(schema, "")
-}
-
 func schemaToFieldsWithName(schema gopenapi.Schema, structName string) []FieldData {
 	var fields []FieldData
 
@@ -2187,7 +1716,29 @@ func typeToGoType(t reflect.Type) string {
 		return fmt.Sprintf("[%d]%s", t.Len(), typeToGoType(t.Elem()))
 	case reflect.Ptr:
 		return "*" + typeToGoType(t.Elem())
+	case reflect.Struct:
+		// For struct types, return interface{} as we can't generate the struct inline
+		return "interface{}"
 	default:
+		// For named types (aliases), check if we can get the underlying type name
+		// This handles cases like: type UserID string, type Status int, etc.
+		if t.PkgPath() != "" && t.Name() != "" {
+			// This is a named type from a package
+			// Try to determine the underlying type by looking at the type's string representation
+			typeStr := t.String()
+
+			// Handle common patterns for named types
+			if strings.Contains(typeStr, "string") {
+				return "string"
+			} else if strings.Contains(typeStr, "int") && !strings.Contains(typeStr, "interface") {
+				return "int"
+			} else if strings.Contains(typeStr, "float") {
+				return "float64"
+			} else if strings.Contains(typeStr, "bool") {
+				return "bool"
+			}
+		}
+
 		return "interface{}"
 	}
 }

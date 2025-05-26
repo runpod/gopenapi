@@ -196,7 +196,10 @@ func TestOpenAPIServer(t *testing.T) {
 							return
 						}
 						w.WriteHeader(http.StatusOK)
-						w.Write([]byte("Params OK"))
+						if _, err := w.Write([]byte("Params OK")); err != nil {
+							http.Error(w, "Failed to write response", http.StatusInternalServerError)
+							return
+						}
 					}),
 				},
 			},
@@ -443,7 +446,10 @@ func getOpenAPIJSONHandler(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writer.Write(bytes)
+	if _, err := writer.Write(bytes); err != nil {
+		http.Error(writer, "Failed to write response", http.StatusInternalServerError)
+		return
+	}
 }
 
 func apiKeyHandler(next http.Handler) http.Handler {

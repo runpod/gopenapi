@@ -45,72 +45,97 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("API error %d: %s", e.StatusCode, e.Message)
 }
 
-{{range .Operations}}
-{{if .HasPathParams}}
+{{- range .Operations}}
+{{- if .HasPathParams}}
 // {{.StructName}}PathParams contains path parameters for {{.OperationId}}
 type {{.StructName}}PathParams struct {
-{{range .PathParams}}	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
-{{end}}}
-{{end}}
+{{- range .PathParams}}
+	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
+{{- end}}
+}
+{{- end}}
 
-{{if .HasQueryParams}}
+{{- if .HasQueryParams}}
 // {{.StructName}}QueryParams contains query parameters for {{.OperationId}}
 type {{.StructName}}QueryParams struct {
-{{range .QueryParams}}	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
-{{end}}}
-{{end}}
+{{- range .QueryParams}}
+	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
+{{- end}}
+}
+{{- end}}
 
-{{if .HasHeaderParams}}
+{{- if .HasHeaderParams}}
 // {{.StructName}}HeaderParams contains header parameters for {{.OperationId}}
 type {{.StructName}}HeaderParams struct {
-{{range .HeaderParams}}	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
-{{end}}}
-{{end}}
+{{- range .HeaderParams}}
+	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
+{{- end}}
+}
+{{- end}}
 
-{{if .HasRequestBody}}
+{{- if .HasRequestBody}}
 // {{.StructName}}RequestBody contains the request body for {{.OperationId}}
 type {{.StructName}}RequestBody struct {
-{{range .RequestBodyFields}}	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
-{{end}}}
-{{end}}
+{{- range .RequestBodyFields}}
+	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
+{{- end}}
+}
+{{- end}}
 
-{{if .HasAnyParams}}
+{{- if .HasAnyParams}}
 // {{.StructName}}Options contains all parameters for {{.OperationId}}
 type {{.StructName}}Options struct {
-{{if .HasPathParams}}	Path   *{{.StructName}}PathParams   `json:"path,omitempty"`
-{{end}}{{if .HasQueryParams}}	Query  *{{.StructName}}QueryParams  `json:"query,omitempty"`
-{{end}}{{if .HasHeaderParams}}	Headers *{{.StructName}}HeaderParams `json:"headers,omitempty"`
-{{end}}{{if .HasRequestBody}}	Body   *{{.StructName}}RequestBody   `json:"body,omitempty"`
-{{end}}}
-{{end}}
+{{- if .HasPathParams}}
+	Path   *{{.StructName}}PathParams   `json:"path,omitempty"`
+{{- end}}
+{{- if .HasQueryParams}}
+	Query  *{{.StructName}}QueryParams  `json:"query,omitempty"`
+{{- end}}
+{{- if .HasHeaderParams}}
+	Headers *{{.StructName}}HeaderParams `json:"headers,omitempty"`
+{{- end}}
+{{- if .HasRequestBody}}
+	Body   *{{.StructName}}RequestBody   `json:"body,omitempty"`
+{{- end}}
+}
+{{- end}}
 
-{{if and .HasResponseBody (gt (len .ResponseFields) 0)}}
+{{- if and .HasResponseBody (gt (len .ResponseFields) 0)}}
 // {{.StructName}}Response represents the response from {{.OperationId}}
 type {{.StructName}}Response struct {
-{{range .ResponseFields}}	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
-{{end}}}
-{{end}}
+{{- range .ResponseFields}}
+	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
+{{- end}}
+}
+{{- end}}
 
 // {{.OperationId}} {{.Description}}
-func (c *Client) {{.MethodName}}(ctx context.Context{{if .HasAnyParams}}, opts *{{.StructName}}Options{{end}}) ({{if and .HasResponseBody (gt (len .ResponseFields) 0)}}*{{.StructName}}Response{{else if .ResponseType}}{{.ResponseType}}{{else}}interface{}{{end}}, error) {
-{{if .HasAnyParams}}	if opts == nil {
+func (c *Client) {{.MethodName}}(ctx context.Context{{- if .HasAnyParams}}, opts *{{.StructName}}Options{{- end}}) ({{- if and .HasResponseBody (gt (len .ResponseFields) 0)}}*{{.StructName}}Response{{- else if .ResponseType}}{{.ResponseType}}{{- else}}interface{}{{- end}}, error) {
+{{- if .HasAnyParams}}
+	if opts == nil {
 		opts = &{{.StructName}}Options{}
 	}
-{{end}}
+{{- end}}
 
 	// Build URL path
 	path := "{{.Path}}"
-{{if .HasPathParams}}	if opts.Path != nil {
-{{range .PathParams}}		path = strings.ReplaceAll(path, "{{.PathPattern}}", {{.ConvertToString}})
-{{end}}	}
-{{end}}
+{{- if .HasPathParams}}
+	if opts.Path != nil {
+{{- range .PathParams}}
+		path = strings.ReplaceAll(path, "{{.PathPattern}}", {{.ConvertToString}})
+{{- end}}
+	}
+{{- end}}
 
 	// Build query parameters
 	params := url.Values{}
-{{if .HasQueryParams}}	if opts.Query != nil {
-{{range .QueryParams}}		{{.AddToParams}}
-{{end}}	}
-{{end}}
+{{- if .HasQueryParams}}
+	if opts.Query != nil {
+{{- range .QueryParams}}
+		{{.AddToParams}}
+{{- end}}
+	}
+{{- end}}
 
 	// Construct full URL
 	fullURL := c.BaseURL + path
@@ -120,75 +145,96 @@ func (c *Client) {{.MethodName}}(ctx context.Context{{if .HasAnyParams}}, opts *
 
 	// Prepare request body
 	var body io.Reader
-{{if .HasRequestBody}}	if opts.Body != nil {
+{{- if .HasRequestBody}}
+	if opts.Body != nil {
 		jsonBody, err := json.Marshal(opts.Body)
 		if err != nil {
-{{if .ResponseType}}			var zero {{.ResponseType}}
+{{- if .ResponseType}}
+			var zero {{.ResponseType}}
 			return zero, fmt.Errorf("failed to marshal request body: %w", err)
-{{else}}			return nil, fmt.Errorf("failed to marshal request body: %w", err)
-{{end}}		}
+{{- else}}
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+{{- end}}
+		}
 		body = bytes.NewReader(jsonBody)
 	}
-{{end}}
+{{- end}}
 
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "{{.Method}}", fullURL, body)
 	if err != nil {
-{{if .ResponseType}}		var zero {{.ResponseType}}
+{{- if .ResponseType}}
+		var zero {{.ResponseType}}
 		return zero, fmt.Errorf("failed to create request: %w", err)
-{{else}}		return nil, fmt.Errorf("failed to create request: %w", err)
-{{end}}	}
+{{- else}}
+		return nil, fmt.Errorf("failed to create request: %w", err)
+{{- end}}
+	}
 
 	// Set default headers
 	for key, value := range c.Headers {
 		req.Header.Set(key, value)
 	}
 
-{{if .HasRequestBody}}	// Set content type for request body
+{{- if .HasRequestBody}}
+	// Set content type for request body
 	if opts.Body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-{{end}}
+{{- end}}
 
 	// Set custom headers
-{{if .HasHeaderParams}}	if opts.Headers != nil {
-{{range .HeaderParams}}		{{.SetHeader}}
-{{end}}	}
-{{end}}
+{{- if .HasHeaderParams}}
+	if opts.Headers != nil {
+{{- range .HeaderParams}}
+		{{.SetHeader}}
+{{- end}}
+	}
+{{- end}}
 
 	// Execute request
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-{{if .ResponseType}}		var zero {{.ResponseType}}
+{{- if .ResponseType}}
+		var zero {{.ResponseType}}
 		return zero, fmt.Errorf("failed to execute request: %w", err)
-{{else}}		return nil, fmt.Errorf("failed to execute request: %w", err)
-{{end}}	}
+{{- else}}
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+{{- end}}
+	}
 	defer resp.Body.Close()
 
 	// Read response body
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-{{if .ResponseType}}		var zero {{.ResponseType}}
+{{- if .ResponseType}}
+		var zero {{.ResponseType}}
 		return zero, fmt.Errorf("failed to read response body: %w", err)
-{{else}}		return nil, fmt.Errorf("failed to read response body: %w", err)
-{{end}}	}
+{{- else}}
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+{{- end}}
+	}
 
 	// Check for error status codes
 	if resp.StatusCode >= 400 {
-{{if .ResponseType}}		var zero {{.ResponseType}}
+{{- if .ResponseType}}
+		var zero {{.ResponseType}}
 		return zero, &Error{
 			StatusCode: resp.StatusCode,
 			Message:    string(respBody),
 			Body:       respBody,
 		}
-{{else}}		return nil, &Error{
+{{- else}}
+		return nil, &Error{
 			StatusCode: resp.StatusCode,
 			Message:    string(respBody),
 			Body:       respBody,
 		}
-{{end}}	}
+{{- end}}
+	}
 
-{{if and .HasResponseBody (gt (len .ResponseFields) 0)}}	// Parse response
+{{- if and .HasResponseBody (gt (len .ResponseFields) 0)}}
+	// Parse response
 	var result {{.StructName}}Response
 	if len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, &result); err != nil {
@@ -196,7 +242,8 @@ func (c *Client) {{.MethodName}}(ctx context.Context{{if .HasAnyParams}}, opts *
 		}
 	}
 	return &result, nil
-{{else if .ResponseType}}	// Parse simple type response
+{{- else if .ResponseType}}
+	// Parse simple type response
 	if len(respBody) > 0 {
 		var result {{.ResponseType}}
 		if err := json.Unmarshal(respBody, &result); err != nil {
@@ -207,8 +254,10 @@ func (c *Client) {{.MethodName}}(ctx context.Context{{if .HasAnyParams}}, opts *
 	}
 	var zero {{.ResponseType}}
 	return zero, nil
-{{else}}	// Return raw response for non-JSON responses
+{{- else}}
+	// Return raw response for non-JSON responses
 	return string(respBody), nil
-{{end}}}
+{{- end}}
+}
 
-{{end}} 
+{{- end}} 

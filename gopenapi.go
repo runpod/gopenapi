@@ -114,7 +114,7 @@ func reflectTypeToJSON(t reflect.Type, schemaJSON map[string]any) error {
 		schemaJSON["type"] = "array"
 		items := map[string]interface{}{}
 		if t.Elem() != nil {
-			reflectTypeToJSON(t.Elem(), items)
+			_ = reflectTypeToJSON(t.Elem(), items)
 			// Add items schema if we can determine element type
 			schemaJSON["items"] = items
 		}
@@ -598,7 +598,7 @@ func OperationFromRequest(r *http.Request) (*Operation, bool) {
 
 func WriteResponse(w http.ResponseWriter, status int, body any) {
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // resolveRefs resolves all schema references in the spec

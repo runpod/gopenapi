@@ -155,8 +155,10 @@ export class {{ .ClientName }}Client {
   ): Promise<{{ if and .HasResponseBody (gt (len .ResponseFields) 0) }}{{ .StructName }}Response{{ else if .ResponseType }}{{ .ResponseType | typescript_type }}{{ else }}void{{ end }}> {
     // Build path
     let pathStr = "{{ .Path }}";
+    {{- if .HasPathParams }}
     {{- range .PathParams }}
     pathStr = pathStr.replace("{{ .PathPattern }}", String(path.{{ .Name }}));
+    {{- end }}
     {{- end }}
 
     // Build query parameters

@@ -32,7 +32,7 @@ func stockGetUserHandler(w http.ResponseWriter, r *http.Request) {
 		Email: "john@example.com",
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	_ = json.NewEncoder(w).Encode(user)
 }
 
 func stockCreateProductHandler(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +47,7 @@ func stockCreateProductHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(product)
+	_ = json.NewEncoder(w).Encode(product)
 }
 
 // GopenAPI handlers
