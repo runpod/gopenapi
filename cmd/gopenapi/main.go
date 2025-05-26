@@ -1699,6 +1699,12 @@ func schemaToFieldsWithName(schema gopenapi.Schema, structName string) []FieldDa
 }
 
 func typeToGoType(t reflect.Type) string {
+	// Handle named types (aliases) by resolving to their underlying type
+	if t.PkgPath() != "" && t.Name() != "" {
+		// This is a named type (alias), resolve to underlying type
+		return typeToGoTypeRecursive(t, make(map[reflect.Type]bool))
+	}
+
 	switch t.Kind() {
 	case reflect.String:
 		return "string"
@@ -1720,27 +1726,74 @@ func typeToGoType(t reflect.Type) string {
 		// For struct types, return interface{} as we can't generate the struct inline
 		return "interface{}"
 	default:
-		// For named types (aliases), check if we can get the underlying type name
-		// This handles cases like: type UserID string, type Status int, etc.
-		if t.PkgPath() != "" && t.Name() != "" {
-			// This is a named type from a package
-			// Try to determine the underlying type by looking at the type's string representation
-			typeStr := t.String()
-
-			// Handle common patterns for named types
-			if strings.Contains(typeStr, "string") {
-				return "string"
-			} else if strings.Contains(typeStr, "int") && !strings.Contains(typeStr, "interface") {
-				return "int"
-			} else if strings.Contains(typeStr, "float") {
-				return "float64"
-			} else if strings.Contains(typeStr, "bool") {
-				return "bool"
-			}
-		}
-
 		return "interface{}"
 	}
+}
+
+// typeToGoTypeRecursive resolves named types to their underlying types with cycle detection
+func typeToGoTypeRecursive(t reflect.Type, visited map[reflect.Type]bool) string {
+	// Prevent infinite recursion
+	if visited[t] {
+		return "interface{}"
+	}
+	visited[t] = true
+	defer delete(visited, t)
+
+	// If this is a named type, we need to check what it's based on
+	if t.PkgPath() != "" && t.Name() != "" {
+		// For named types, we need to look at the underlying type
+		// We can't directly access the underlying type in reflection,
+		// but we can create a zero value and check its type
+
+		// Try to create a zero value and see what kind it is
+		zeroValue := reflect.Zero(t)
+
+		// Check the kind of the zero value
+		switch zeroValue.Kind() {
+		case reflect.String:
+			return "string"
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return "int"
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return "uint"
+		case reflect.Float32, reflect.Float64:
+			return "float64"
+		case reflect.Bool:
+			return "bool"
+		case reflect.Slice:
+			// For slice aliases, get the element type
+			elemType := t.Elem()
+			if elemType.PkgPath() != "" && elemType.Name() != "" {
+				// Element is also a named type
+				return "[]" + typeToGoTypeRecursive(elemType, visited)
+			}
+			return "[]" + typeToGoType(elemType)
+		case reflect.Array:
+			// For array aliases, get the element type
+			elemType := t.Elem()
+			if elemType.PkgPath() != "" && elemType.Name() != "" {
+				// Element is also a named type
+				return fmt.Sprintf("[%d]%s", t.Len(), typeToGoTypeRecursive(elemType, visited))
+			}
+			return fmt.Sprintf("[%d]%s", t.Len(), typeToGoType(elemType))
+		case reflect.Ptr:
+			// For pointer aliases, get the element type
+			elemType := t.Elem()
+			if elemType.PkgPath() != "" && elemType.Name() != "" {
+				// Element is also a named type
+				return "*" + typeToGoTypeRecursive(elemType, visited)
+			}
+			return "*" + typeToGoType(elemType)
+		case reflect.Struct:
+			// Named struct type - return interface{}
+			return "interface{}"
+		default:
+			return "interface{}"
+		}
+	}
+
+	// Not a named type, use regular resolution
+	return typeToGoType(t)
 }
 
 func generateConvertToString(goName, goType string) string {

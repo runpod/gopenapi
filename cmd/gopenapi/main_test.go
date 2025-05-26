@@ -1605,3 +1605,515 @@ func findFieldByName(fields []FieldData, name string) *FieldData {
 	}
 	return nil
 }
+
+// Test that alias types in struct fields are properly resolved
+func TestAliasTypesInStructFields(t *testing.T) {
+	type UserIDAlias string
+	type StatusAlias int
+	type ScoreAlias float64
+	type IsActiveAlias bool
+
+	type User struct {
+		ID       UserIDAlias   `json:"id"`
+		Status   StatusAlias   `json:"status"`
+		Score    ScoreAlias    `json:"score"`
+		IsActive IsActiveAlias `json:"is_active"`
+		Name     string        `json:"name"`
+	}
+
+	spec := &gopenapi.Spec{
+		Paths: gopenapi.Paths{
+			"/users": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createUser",
+					Description: "Create a new user",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: reflect.TypeOf(User{})},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "Created",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: reflect.TypeOf(User{})},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	templateData := generateTemplateData(spec, "client")
+
+	if len(templateData.Operations) != 1 {
+		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+	}
+
+	op := templateData.Operations[0]
+
+	// Test request body fields
+	if !op.HasRequestBody {
+		t.Error("Expected operation to have request body")
+	}
+
+	if len(op.RequestBodyFields) != 5 {
+		t.Errorf("Expected 5 request body fields, got %d", len(op.RequestBodyFields))
+	}
+
+	// Debug: Print all field types
+	t.Logf("Request body fields:")
+	for _, field := range op.RequestBodyFields {
+		t.Logf("  %s (%s): %s", field.Name, field.GoName, field.GoType)
+	}
+
+	// Test each field type
+	expectedTypes := map[string]string{
+		"id":        "string",
+		"status":    "int",
+		"score":     "float64",
+		"is_active": "bool",
+		"name":      "string",
+	}
+
+	for _, field := range op.RequestBodyFields {
+		expectedType, exists := expectedTypes[field.Name]
+		if !exists {
+			t.Errorf("Unexpected field: %s", field.Name)
+			continue
+		}
+
+		if field.GoType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", field.Name, expectedType, field.GoType)
+		}
+	}
+
+	// Test response body fields
+	if !op.HasResponseBody {
+		t.Error("Expected operation to have response body")
+	}
+
+	if len(op.ResponseFields) != 5 {
+		t.Errorf("Expected 5 response fields, got %d", len(op.ResponseFields))
+	}
+
+	// Debug: Print all response field types
+	t.Logf("Response body fields:")
+	for _, field := range op.ResponseFields {
+		t.Logf("  %s (%s): %s", field.Name, field.GoName, field.GoType)
+	}
+
+	// Test each response field type
+	for _, field := range op.ResponseFields {
+		expectedType, exists := expectedTypes[field.Name]
+		if !exists {
+			t.Errorf("Unexpected response field: %s", field.Name)
+			continue
+		}
+
+		if field.GoType != expectedType {
+			t.Errorf("Response field %s: expected type %s, got %s", field.Name, expectedType, field.GoType)
+		}
+	}
+}
+
+// Test edge cases where alias types might fail
+func TestAliasTypesEdgeCases(t *testing.T) {
+	// Define alias types in different ways
+	type StringAlias string
+	type IntAlias int
+	type FloatAlias float64
+	type BoolAlias bool
+	type SliceAlias []string
+
+	// Test with nested structs
+	type Address struct {
+		Street StringAlias `json:"street"`
+		Number IntAlias    `json:"number"`
+	}
+
+	type User struct {
+		ID      StringAlias `json:"id"`
+		Score   FloatAlias  `json:"score"`
+		Active  BoolAlias   `json:"active"`
+		Tags    SliceAlias  `json:"tags"`
+		Address Address     `json:"address"`
+	}
+
+	// Test with pointer to alias
+	type OptionalID *StringAlias
+
+	type UserWithOptional struct {
+		ID       StringAlias `json:"id"`
+		Optional OptionalID  `json:"optional"`
+	}
+
+	tests := []struct {
+		name           string
+		structType     reflect.Type
+		expectedFields map[string]string
+	}{
+		{
+			name:       "Simple aliases",
+			structType: reflect.TypeOf(User{}),
+			expectedFields: map[string]string{
+				"id":      "string",
+				"score":   "float64",
+				"active":  "bool",
+				"tags":    "[]string",
+				"address": "interface{}", // Nested struct should be interface{}
+			},
+		},
+		{
+			name:       "Pointer to alias",
+			structType: reflect.TypeOf(UserWithOptional{}),
+			expectedFields: map[string]string{
+				"id":       "string",
+				"optional": "*string", // Pointer to alias should resolve to *string
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := &gopenapi.Spec{
+				Paths: gopenapi.Paths{
+					"/test": gopenapi.Path{
+						Post: &gopenapi.Operation{
+							OperationId: "testOp",
+							RequestBody: gopenapi.RequestBody{
+								Required: true,
+								Content: gopenapi.Content{
+									gopenapi.ApplicationJSON: {
+										Schema: gopenapi.Schema{Type: tt.structType},
+									},
+								},
+							},
+							Responses: gopenapi.Responses{
+								200: {
+									Description: "Success",
+									Content: gopenapi.Content{
+										gopenapi.ApplicationJSON: {
+											Schema: gopenapi.Schema{Type: tt.structType},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			templateData := generateTemplateData(spec, "client")
+			if len(templateData.Operations) != 1 {
+				t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+			}
+
+			op := templateData.Operations[0]
+
+			// Debug: Print all field types
+			t.Logf("Fields for %s:", tt.name)
+			for _, field := range op.RequestBodyFields {
+				t.Logf("  %s (%s): %s", field.Name, field.GoName, field.GoType)
+			}
+
+			// Check each expected field
+			for expectedName, expectedType := range tt.expectedFields {
+				found := false
+				for _, field := range op.RequestBodyFields {
+					if field.Name == expectedName {
+						found = true
+						if field.GoType != expectedType {
+							t.Errorf("Field %s: expected type %s, got %s", expectedName, expectedType, field.GoType)
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected field %s not found", expectedName)
+				}
+			}
+		})
+	}
+}
+
+// Test with alias types from different packages (simulated)
+func TestAliasTypesFromDifferentPackages(t *testing.T) {
+	// This simulates what might happen with alias types from different packages
+	// where the string representation might be different
+
+	// Create a type that has a complex string representation
+	type ComplexAlias struct {
+		Value string
+	}
+
+	type AliasOfComplex ComplexAlias
+
+	type TestStruct struct {
+		Simple  string         `json:"simple"`
+		Complex AliasOfComplex `json:"complex"`
+		Slice   []ComplexAlias `json:"slice"`
+		Ptr     *ComplexAlias  `json:"ptr"`
+	}
+
+	spec := &gopenapi.Spec{
+		Paths: gopenapi.Paths{
+			"/test": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testComplexAliases",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: reflect.TypeOf(TestStruct{})},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: reflect.TypeOf(TestStruct{})},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	templateData := generateTemplateData(spec, "client")
+	if len(templateData.Operations) != 1 {
+		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+	}
+
+	op := templateData.Operations[0]
+
+	// Debug: Print all field types
+	t.Logf("Complex alias fields:")
+	for _, field := range op.RequestBodyFields {
+		t.Logf("  %s (%s): %s", field.Name, field.GoName, field.GoType)
+	}
+
+	// Test that complex types fall back to interface{}
+	expectedTypes := map[string]string{
+		"simple":  "string",
+		"complex": "interface{}",   // Complex alias should fall back to interface{}
+		"slice":   "[]interface{}", // Slice of complex should be []interface{}
+		"ptr":     "*interface{}",  // Pointer to complex should be *interface{}
+	}
+
+	for _, field := range op.RequestBodyFields {
+		expectedType, exists := expectedTypes[field.Name]
+		if !exists {
+			t.Errorf("Unexpected field: %s", field.Name)
+			continue
+		}
+
+		if field.GoType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", field.Name, expectedType, field.GoType)
+		}
+	}
+}
+
+// Test that demonstrates the fix for alias types in structs
+func TestAliasTypesInStructsFixed(t *testing.T) {
+	// This test demonstrates that alias types in struct fields are now properly resolved
+	// Previously, the string-based approach in typeToGoType might have failed for certain cases
+
+	type UserID string
+	type AccountBalance float64
+	type IsVerified bool
+	type TagList []string
+
+	type Account struct {
+		UserID   UserID         `json:"user_id"`
+		Balance  AccountBalance `json:"balance"`
+		Verified IsVerified     `json:"verified"`
+		Tags     TagList        `json:"tags"`
+	}
+
+	// Test that when this struct is used in a schema, all alias types are correctly resolved
+	spec := &gopenapi.Spec{
+		Paths: gopenapi.Paths{
+			"/accounts": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "createAccount",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: reflect.TypeOf(Account{})},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "Account created",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: reflect.TypeOf(Account{})},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	templateData := generateTemplateData(spec, "client")
+
+	if len(templateData.Operations) != 1 {
+		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+	}
+
+	op := templateData.Operations[0]
+
+	// Verify that all alias types are correctly resolved to their underlying types
+	expectedFieldTypes := map[string]string{
+		"user_id":  "string",   // UserID alias should resolve to string
+		"balance":  "float64",  // AccountBalance alias should resolve to float64
+		"verified": "bool",     // IsVerified alias should resolve to bool
+		"tags":     "[]string", // TagList alias should resolve to []string
+	}
+
+	// Check request body fields
+	if !op.HasRequestBody {
+		t.Fatal("Expected operation to have request body")
+	}
+
+	if len(op.RequestBodyFields) != 4 {
+		t.Fatalf("Expected 4 request body fields, got %d", len(op.RequestBodyFields))
+	}
+
+	for _, field := range op.RequestBodyFields {
+		expectedType, exists := expectedFieldTypes[field.Name]
+		if !exists {
+			t.Errorf("Unexpected field: %s", field.Name)
+			continue
+		}
+
+		if field.GoType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s (alias type resolution failed)",
+				field.Name, expectedType, field.GoType)
+		} else {
+			t.Logf("✓ Field %s correctly resolved from alias to %s", field.Name, field.GoType)
+		}
+	}
+
+	// Check response body fields
+	if !op.HasResponseBody {
+		t.Fatal("Expected operation to have response body")
+	}
+
+	if len(op.ResponseFields) != 4 {
+		t.Fatalf("Expected 4 response fields, got %d", len(op.ResponseFields))
+	}
+
+	for _, field := range op.ResponseFields {
+		expectedType, exists := expectedFieldTypes[field.Name]
+		if !exists {
+			t.Errorf("Unexpected response field: %s", field.Name)
+			continue
+		}
+
+		if field.GoType != expectedType {
+			t.Errorf("Response field %s: expected type %s, got %s (alias type resolution failed)",
+				field.Name, expectedType, field.GoType)
+		} else {
+			t.Logf("✓ Response field %s correctly resolved from alias to %s", field.Name, field.GoType)
+		}
+	}
+
+	t.Log("All alias types in struct fields were correctly resolved to their underlying types!")
+}
+
+// Test that the old string-based approach would have failed on
+func TestAliasTypeResolutionEdgeCases(t *testing.T) {
+	// These types might have tricky string representations
+	type StringLikeAlias string
+	type IntLikeAlias int
+	type FloatLikeAlias float64
+	type BoolLikeAlias bool
+
+	// Nested alias types
+	type NestedStringAlias StringLikeAlias
+	type NestedIntAlias IntLikeAlias
+
+	type TestStruct struct {
+		Direct    StringLikeAlias   `json:"direct"`
+		Nested    NestedStringAlias `json:"nested"`
+		NestedInt NestedIntAlias    `json:"nested_int"`
+		Float     FloatLikeAlias    `json:"float"`
+		Bool      BoolLikeAlias     `json:"bool"`
+	}
+
+	spec := &gopenapi.Spec{
+		Paths: gopenapi.Paths{
+			"/test": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testEdgeCases",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: reflect.TypeOf(TestStruct{})},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: reflect.TypeOf(TestStruct{})},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	templateData := generateTemplateData(spec, "client")
+
+	if len(templateData.Operations) != 1 {
+		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+	}
+
+	op := templateData.Operations[0]
+
+	// All alias types should resolve to their underlying types
+	expectedTypes := map[string]string{
+		"direct":     "string",
+		"nested":     "string", // Nested string alias should still resolve to string
+		"nested_int": "int",    // Nested int alias should resolve to int
+		"float":      "float64",
+		"bool":       "bool",
+	}
+
+	t.Logf("Edge case fields:")
+	for _, field := range op.RequestBodyFields {
+		t.Logf("  %s (%s): %s", field.Name, field.GoName, field.GoType)
+
+		expectedType, exists := expectedTypes[field.Name]
+		if !exists {
+			t.Errorf("Unexpected field: %s", field.Name)
+			continue
+		}
+
+		if field.GoType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", field.Name, expectedType, field.GoType)
+		}
+	}
+}
