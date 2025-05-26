@@ -225,20 +225,20 @@ func (s Schema) Validate(value string) (any, error) {
 type Parameters []Parameter
 
 type GroupedParameters struct {
-	path   map[string]Schema
-	query  map[string]Schema
-	header map[string]Schema
-	cookie map[string]Schema
+	Path   map[string]Schema
+	Query  map[string]Schema
+	Header map[string]Schema
+	Cookie map[string]Schema
 }
 
 var EmptyGroupedParameters = GroupedParameters{
-	path:   make(map[string]Schema),
-	query:  make(map[string]Schema),
-	header: make(map[string]Schema),
-	cookie: make(map[string]Schema),
+	Path:   make(map[string]Schema),
+	Query:  make(map[string]Schema),
+	Header: make(map[string]Schema),
+	Cookie: make(map[string]Schema),
 }
 
-func (p Parameters) group() GroupedParameters {
+func (p Parameters) Group() GroupedParameters {
 	path := make(map[string]Schema)
 	query := make(map[string]Schema)
 	header := make(map[string]Schema)
@@ -255,7 +255,7 @@ func (p Parameters) group() GroupedParameters {
 			cookie[parameter.Name] = parameter.Schema
 		}
 	}
-	return GroupedParameters{path, query, header, cookie}
+	return GroupedParameters{Path: path, Query: query, Header: header, Cookie: cookie}
 }
 
 type Parameter struct {

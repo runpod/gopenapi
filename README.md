@@ -1,6 +1,6 @@
 # gopenapi
 
-`gopenapi` is a Go library for building OpenAPI-compliant HTTP services. It provides tools for defining your API using OpenAPI specifications and handles request validation, routing, and response generation.
+`gopenapi` is a Go library for building OpenAPI-compliant HTTP services and generating HTTP clients. It provides tools for defining your API using OpenAPI specifications and handles request validation, routing, response generation, and client code generation.
 
 ## Features
 
@@ -9,15 +9,165 @@
 *   Response generation
 *   Middleware support
 *   Automatic schema generation from Go types
+*   Cross-platform client generation (Windows, macOS, Linux)
+*   AST-based Go file parsing (no CGO required)
 
 ## Installation
 
+### Install the CLI tool
+
 ```bash
-go get github.com/runpod/gopenapi 
+go install github.com/runpod/gopenapi/cmd/gopenapi@latest
 ```
 
+### Install the library
 
-## Usage
+```bash
+go get github.com/runpod/gopenapi
+```
+
+## CLI Usage
+
+The `gopenapi` command-line tool can generate HTTP clients in multiple languages from OpenAPI specifications.
+
+### Generate Clients from Go Files
+
+First, create a Go file with your OpenAPI specification:
+
+```go
+// api_spec.go
+package main
+
+import (
+    "net/http"
+    "github.com/runpod/gopenapi"
+)
+
+type User struct {
+    ID    int    `json:"id"`
+    Name  string `json:"name"`
+    Email string `json:"email"`
+}
+
+var MyAPISpec = gopenapi.Spec{
+    OpenAPI: "3.0.0",
+    Info: gopenapi.Info{
+        Title:   "My API",
+        Version: "1.0.0",
+    },
+    Paths: gopenapi.Paths{
+        "/users/{id}": gopenapi.Path{
+            Get: &gopenapi.Operation{
+                OperationId: "getUserById",
+                Summary:     "Get a user by ID",
+                Parameters: gopenapi.Parameters{
+                    {
+                        Name:     "id",
+                        In:       gopenapi.InPath,
+                        Required: true,
+                        Schema:   gopenapi.Schema{Type: gopenapi.Integer},
+                    },
+                },
+                Responses: gopenapi.Responses{
+                    200: {
+                        Description: "User found",
+                        Content: gopenapi.Content{
+                            gopenapi.ApplicationJSON: {
+                                Schema: gopenapi.Schema{Type: gopenapi.Object[User]()},
+                            },
+                        },
+                    },
+                },
+                Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                    // Your handler implementation
+                }),
+            },
+        },
+    },
+}
+```
+
+Then generate clients:
+
+```bash
+# Generate clients for all supported languages
+gopenapi -spec api_spec.go -var MyAPISpec -languages=go,python,typescript -output=./clients
+
+# Generate only Go client
+gopenapi -spec api_spec.go -var MyAPISpec -languages=go -output=./clients
+
+# Generate only Python client  
+gopenapi -spec api_spec.go -var MyAPISpec -languages=python -output=./clients
+
+# Generate only TypeScript client
+gopenapi -spec api_spec.go -var MyAPISpec -languages=typescript -output=./clients
+```
+
+### Command Line Options
+
+- `-spec` - Go file containing the OpenAPI spec (required)
+- `-var` - Variable name containing the spec (required, e.g., 'ExampleSpec')
+- `-languages` - Comma-separated list of languages to generate (go,python,typescript)
+- `-output` - Output directory for generated clients (default: current directory)
+- `-package` - Package name for generated code (default: client)
+
+### Generated Client Features
+
+**Go Client:**
+- Type-safe parameter and response handling
+- Context support for request cancellation
+- Automatic JSON marshaling/unmarshaling
+- Configurable HTTP client
+- Error handling with detailed error information
+
+**Python Client:**
+- Type hints for better IDE support
+- Dataclasses for clean, immutable parameter and response objects
+- Automatic JSON handling with proper field name conversion
+- Session-based requests for connection pooling
+- Configurable headers
+- Exception-based error handling
+
+**TypeScript Client:**
+- Full TypeScript type safety with interfaces for all parameters and responses
+- Modern async/await API using fetch
+- Configurable timeout and headers
+- Automatic JSON serialization/deserialization
+- Proper error handling with custom ApiError class
+- Support for both Node.js and browser environments
+
+### TypeScript Usage Example
+
+```typescript
+import { ClientClient, ApiError } from './client';
+
+const client = new ClientClient({
+  baseURL: 'https://api.example.com',
+  headers: {
+    'Authorization': 'Bearer your-token-here'
+  },
+  timeout: 10000
+});
+
+try {
+  // Type-safe API calls
+  const user = await client.getUserById(
+    { id: 123 },                    // path params
+    { include: 'profile' },         // query params (optional)
+    { authorization: 'Bearer ...' } // headers (optional)
+  );
+  
+  console.log('User:', user);
+} catch (error) {
+  if (error instanceof ApiError) {
+    console.error(`API Error ${error.statusCode}: ${error.message}`);
+  } else {
+    console.error('Network error:', error);
+  }
+}
+```
+
+## Library Usage
 
 ```go
 package main

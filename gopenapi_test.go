@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/MarceloPetrucio/go-scalar-api-reference"
 	"github.com/runpod/gopenapi"
 )
 
@@ -416,15 +415,15 @@ func TestOpenAPIServer(t *testing.T) {
 }
 
 func getDocsHandler(w http.ResponseWriter, r *http.Request) {
-	htmlContent, err := scalar.ApiReferenceHTML(&scalar.Options{
-		SpecURL: "http://127.0.0.1:8080/openapi.json",
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	// htmlContent, err := scalar.ApiReferenceHTML(&scalar.Options{
+	// 	SpecURL: "http://127.0.0.1:8080/openapi.json",
+	// })
+	// if err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
 	w.WriteHeader(200)
-	w.Write([]byte(htmlContent))
+	// w.Write([]byte(htmlContent))
 }
 
 func getOpenAPIJSONHandler(writer http.ResponseWriter, request *http.Request) {

@@ -37,7 +37,7 @@ func validate(group map[string]Schema, name string, value string) (any, error) {
 }
 
 func (v *DefaultValidationMiddleware) ValidatePathValue(operation *Operation, name string, value string) (any, error) {
-	return validate(operation.Parameters.group().path, name, value)
+	return validate(operation.Parameters.Group().Path, name, value)
 }
 
 func (v *DefaultValidationMiddleware) ValidateBody(operation *Operation, request *http.Request) (any, error) {
@@ -64,15 +64,15 @@ func (v *DefaultValidationMiddleware) ValidateBody(operation *Operation, request
 }
 
 func (v *DefaultValidationMiddleware) ValidateQueryValue(operation *Operation, name string, value string) (any, error) {
-	return validate(operation.Parameters.group().query, name, value)
+	return validate(operation.Parameters.Group().Query, name, value)
 }
 
 func (v *DefaultValidationMiddleware) ValidateHeaderValue(operation *Operation, name string, value string) (any, error) {
-	return validate(operation.Parameters.group().header, name, value)
+	return validate(operation.Parameters.Group().Header, name, value)
 }
 
 func (v *DefaultValidationMiddleware) ValidateCookieValue(operation *Operation, name string, value string) (any, error) {
-	return validate(operation.Parameters.group().cookie, name, value)
+	return validate(operation.Parameters.Group().Cookie, name, value)
 }
 
 func (v *DefaultValidationMiddleware) ValidateFormValue(operation *Operation, name string, value string) (any, error) {
@@ -93,9 +93,9 @@ func (v *DefaultValidationMiddleware) ValidateFormValue(operation *Operation, na
 }
 
 func (v *DefaultValidationMiddleware) ValidateRequest(operation *Operation, r *http.Request) (any, error) {
-	groupedParams := operation.Parameters.group()
-	if groupedParams.query != nil {
-		for name := range groupedParams.query {
+	groupedParams := operation.Parameters.Group()
+	if groupedParams.Query != nil {
+		for name := range groupedParams.Query {
 			queryValue := r.URL.Query().Get(name)
 			_, err := v.ValidateQueryValue(operation, name, queryValue)
 			if err != nil {
@@ -104,8 +104,8 @@ func (v *DefaultValidationMiddleware) ValidateRequest(operation *Operation, r *h
 		}
 	}
 
-	if groupedParams.header != nil {
-		for name := range groupedParams.header {
+	if groupedParams.Header != nil {
+		for name := range groupedParams.Header {
 			headerValue := r.Header.Get(name)
 			_, err := v.ValidateHeaderValue(operation, name, headerValue)
 			if err != nil {
@@ -114,8 +114,8 @@ func (v *DefaultValidationMiddleware) ValidateRequest(operation *Operation, r *h
 		}
 	}
 
-	if groupedParams.cookie != nil {
-		for name := range groupedParams.cookie {
+	if groupedParams.Cookie != nil {
+		for name := range groupedParams.Cookie {
 			cookie, err := r.Cookie(name)
 			cookieValue := ""
 			if err == nil {
