@@ -31,6 +31,12 @@ func ParseSpecFromFileWithPath(filename, varName, workingDir string) (gopenapi.S
 
 // parseSpecViaPackages parses the Go file using go/packages and extracts the gopenapi.Spec
 func parseSpecViaPackages(filename, varName, workingDir string) (gopenapi.Spec, error) {
+	// Ensure working directory is absolute
+	absWorkingDir, err := filepath.Abs(workingDir)
+	if err != nil {
+		return gopenapi.Spec{}, fmt.Errorf("failed to get absolute working directory: %w", err)
+	}
+
 	// Load the package with type information
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
@@ -42,32 +48,37 @@ func parseSpecViaPackages(filename, varName, workingDir string) (gopenapi.Spec, 
 			packages.NeedTypesSizes |
 			packages.NeedSyntax |
 			packages.NeedTypesInfo,
-		Dir:   workingDir,
+		Dir:   absWorkingDir,
 		Fset:  token.NewFileSet(),
 		Tests: false,
 	}
 
 	// Calculate the package pattern
-	// First, get the absolute path of the file
-	absFilename, err := filepath.Abs(filename)
-	if err != nil {
-		return gopenapi.Spec{}, fmt.Errorf("failed to get absolute path: %w", err)
+	// First, check if filename is already absolute
+	var absFilename string
+	if filepath.IsAbs(filename) {
+		absFilename = filename
+	} else {
+		// Make it absolute relative to working directory
+		absFilename = filepath.Join(absWorkingDir, filename)
 	}
 
 	// Get the directory of the file
 	fileDir := filepath.Dir(absFilename)
 
 	// Calculate the relative path from the working directory to the file directory
-	relPath, err := filepath.Rel(workingDir, fileDir)
+	relPath, err := filepath.Rel(absWorkingDir, fileDir)
 	if err != nil {
 		// If we can't calculate relative path, try loading with the file directory
 		relPath = fileDir
 	}
 
 	// Convert to package pattern (use forward slashes even on Windows)
-	packagePattern := "./" + filepath.ToSlash(relPath)
-	if packagePattern == "./" || packagePattern == "./." {
+	packagePattern := filepath.ToSlash(relPath)
+	if packagePattern == "" || packagePattern == "." {
 		packagePattern = "."
+	} else if !strings.HasPrefix(packagePattern, "./") && !strings.HasPrefix(packagePattern, "../") {
+		packagePattern = "./" + packagePattern
 	}
 
 	// Load from the working directory to ensure all dependencies are available
