@@ -74,6 +74,7 @@ type {{.StructName}}RequestBody struct {
 {{end}}}
 {{end}}
 
+{{if .HasAnyParams}}
 // {{.StructName}}Options contains all parameters for {{.OperationId}}
 type {{.StructName}}Options struct {
 {{if .HasPathParams}}	Path   *{{.StructName}}PathParams   `json:"path,omitempty"`
@@ -81,8 +82,9 @@ type {{.StructName}}Options struct {
 {{end}}{{if .HasHeaderParams}}	Headers *{{.StructName}}HeaderParams `json:"headers,omitempty"`
 {{end}}{{if .HasRequestBody}}	Body   *{{.StructName}}RequestBody   `json:"body,omitempty"`
 {{end}}}
+{{end}}
 
-{{if .HasResponseBody}}
+{{if and .HasResponseBody (gt (len .ResponseFields) 0)}}
 // {{.StructName}}Response represents the response from {{.OperationId}}
 type {{.StructName}}Response struct {
 {{range .ResponseFields}}	{{.GoName}} {{.GoType}} `json:"{{.Name}}"`
@@ -90,10 +92,11 @@ type {{.StructName}}Response struct {
 {{end}}
 
 // {{.OperationId}} {{.Description}}
-func (c *Client) {{.MethodName}}(ctx context.Context, opts *{{.StructName}}Options) ({{if .HasResponseBody}}*{{.StructName}}Response{{else}}interface{}{{end}}, error) {
-	if opts == nil {
+func (c *Client) {{.MethodName}}(ctx context.Context{{if .HasAnyParams}}, opts *{{.StructName}}Options{{end}}) ({{if and .HasResponseBody (gt (len .ResponseFields) 0)}}*{{.StructName}}Response{{else if .ResponseType}}{{.ResponseType}}{{else}}interface{}{{end}}, error) {
+{{if .HasAnyParams}}	if opts == nil {
 		opts = &{{.StructName}}Options{}
 	}
+{{end}}
 
 	// Build URL path
 	path := "{{.Path}}"
@@ -120,8 +123,10 @@ func (c *Client) {{.MethodName}}(ctx context.Context, opts *{{.StructName}}Optio
 {{if .HasRequestBody}}	if opts.Body != nil {
 		jsonBody, err := json.Marshal(opts.Body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
-		}
+{{if .ResponseType}}			var zero {{.ResponseType}}
+			return zero, fmt.Errorf("failed to marshal request body: %w", err)
+{{else}}			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+{{end}}		}
 		body = bytes.NewReader(jsonBody)
 	}
 {{end}}
@@ -129,8 +134,10 @@ func (c *Client) {{.MethodName}}(ctx context.Context, opts *{{.StructName}}Optio
 	// Create request
 	req, err := http.NewRequestWithContext(ctx, "{{.Method}}", fullURL, body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+{{if .ResponseType}}		var zero {{.ResponseType}}
+		return zero, fmt.Errorf("failed to create request: %w", err)
+{{else}}		return nil, fmt.Errorf("failed to create request: %w", err)
+{{end}}	}
 
 	// Set default headers
 	for key, value := range c.Headers {
@@ -152,26 +159,36 @@ func (c *Client) {{.MethodName}}(ctx context.Context, opts *{{.StructName}}Optio
 	// Execute request
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
+{{if .ResponseType}}		var zero {{.ResponseType}}
+		return zero, fmt.Errorf("failed to execute request: %w", err)
+{{else}}		return nil, fmt.Errorf("failed to execute request: %w", err)
+{{end}}	}
 	defer resp.Body.Close()
 
 	// Read response body
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
+{{if .ResponseType}}		var zero {{.ResponseType}}
+		return zero, fmt.Errorf("failed to read response body: %w", err)
+{{else}}		return nil, fmt.Errorf("failed to read response body: %w", err)
+{{end}}	}
 
 	// Check for error status codes
 	if resp.StatusCode >= 400 {
-		return nil, &Error{
+{{if .ResponseType}}		var zero {{.ResponseType}}
+		return zero, &Error{
 			StatusCode: resp.StatusCode,
 			Message:    string(respBody),
 			Body:       respBody,
 		}
-	}
+{{else}}		return nil, &Error{
+			StatusCode: resp.StatusCode,
+			Message:    string(respBody),
+			Body:       respBody,
+		}
+{{end}}	}
 
-{{if .HasResponseBody}}	// Parse response
+{{if and .HasResponseBody (gt (len .ResponseFields) 0)}}	// Parse response
 	var result {{.StructName}}Response
 	if len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, &result); err != nil {
@@ -179,6 +196,17 @@ func (c *Client) {{.MethodName}}(ctx context.Context, opts *{{.StructName}}Optio
 		}
 	}
 	return &result, nil
+{{else if .ResponseType}}	// Parse simple type response
+	if len(respBody) > 0 {
+		var result {{.ResponseType}}
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			var zero {{.ResponseType}}
+			return zero, fmt.Errorf("failed to unmarshal response: %w", err)
+		}
+		return result, nil
+	}
+	var zero {{.ResponseType}}
+	return zero, nil
 {{else}}	// Return raw response for non-JSON responses
 	return string(respBody), nil
 {{end}}}

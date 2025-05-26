@@ -43,6 +43,8 @@ type OperationData struct {
 	HasHeaderParams   bool
 	HasRequestBody    bool
 	HasResponseBody   bool
+	HasAnyParams      bool   // True if any of the above params exist
+	ResponseType      string // For simple types like "string", "int", etc. Empty if ResponseFields is used
 	PathParams        []ParamData
 	QueryParams       []ParamData
 	HeaderParams      []ParamData
@@ -1528,8 +1530,20 @@ func generateTemplateData(spec *gopenapi.Spec, packageName string, language stri
 						for _, content := range response.Content {
 							if content.Schema.Type != nil {
 								opData.HasResponseBody = true
-								responseStructName := opData.StructName + "Response"
-								opData.ResponseFields = schemaToFieldsWithName(content.Schema, responseStructName)
+
+								// Check if this is a simple type or a struct
+								if content.Schema.Type.Kind() == reflect.Struct {
+									// Complex type - create response struct
+									responseStructName := opData.StructName + "Response"
+									opData.ResponseFields = schemaToFieldsWithName(content.Schema, responseStructName)
+									opData.ResponseType = ""
+
+								} else {
+									// Simple type - no response struct needed, just use the type directly
+									opData.ResponseFields = nil
+									opData.ResponseType = schemaToGoType(content.Schema)
+
+								}
 								break
 							}
 						}
@@ -1537,6 +1551,9 @@ func generateTemplateData(spec *gopenapi.Spec, packageName string, language stri
 					}
 				}
 			}
+
+			// Set HasAnyParams
+			opData.HasAnyParams = opData.HasPathParams || opData.HasQueryParams || opData.HasHeaderParams || opData.HasRequestBody
 
 			operations = append(operations, opData)
 		}

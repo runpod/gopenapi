@@ -75,6 +75,42 @@ var ExampleSpec = gopenapi.Spec{
 				}),
 			},
 		},
+		"/string": gopenapi.Path{
+			Get: &gopenapi.Operation{
+				OperationId: "getString",
+				Summary:     "Get a string",
+				Description: "Get a string",
+				Responses: gopenapi.Responses{
+					200: {
+						Description: "OK",
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.String},
+							},
+						},
+					},
+				},
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+			},
+		},
+		"/number": gopenapi.Path{
+			Get: &gopenapi.Operation{
+				OperationId: "getNumber",
+				Summary:     "Get a number",
+				Description: "Get a number",
+				Responses: gopenapi.Responses{
+					200: {
+						Description: "OK",
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Integer},
+							},
+						},
+					},
+				},
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+			},
+		},
 		"/test-schema": gopenapi.Path{
 			Get: &gopenapi.Operation{
 				OperationId: "testSchema",
@@ -101,6 +137,11 @@ var ExampleSpec = gopenapi.Spec{
 				Responses: gopenapi.Responses{
 					200: {
 						Description: "List of users",
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[[]User]()},
+							},
+						},
 					},
 				},
 				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

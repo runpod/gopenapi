@@ -33,7 +33,7 @@ export interface {{ .StructName }}RequestBody {
 }
 {{- end }}
 
-{{- if .HasResponseBody }}
+{{- if and .HasResponseBody (gt (len .ResponseFields) 0) }}
 export interface {{ .StructName }}Response {
   {{- range .ResponseFields }}
   {{ .Name }}: {{ .GoType | typescript_type }};
@@ -152,7 +152,7 @@ export class {{ .ClientName }}Client {
     {{- if .HasRequestBody }}
     body: {{ .StructName }}RequestBody,
     {{- end }}
-  ): Promise<{{ if .HasResponseBody }}{{ .StructName }}Response{{ else }}void{{ end }}> {
+  ): Promise<{{ if and .HasResponseBody (gt (len .ResponseFields) 0) }}{{ .StructName }}Response{{ else if .ResponseType }}{{ .ResponseType | typescript_type }}{{ else }}void{{ end }}> {
     // Build path
     let pathStr = "{{ .Path }}";
     {{- range .PathParams }}
@@ -183,7 +183,7 @@ export class {{ .ClientName }}Client {
     }
     {{- end }}
 
-    return this.request<{{ if .HasResponseBody }}{{ .StructName }}Response{{ else }}void{{ end }}>(
+    return this.request<{{ if and .HasResponseBody (gt (len .ResponseFields) 0) }}{{ .StructName }}Response{{ else if .ResponseType }}{{ .ResponseType | typescript_type }}{{ else }}void{{ end }}>(
       "{{ .Method }}",
       pathStr,
       {

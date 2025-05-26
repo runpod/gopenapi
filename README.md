@@ -139,9 +139,9 @@ gopenapi -spec api_spec.go -var MyAPISpec -languages=typescript -output=./client
 ### TypeScript Usage Example
 
 ```typescript
-import { ClientClient, ApiError } from './client';
+import { Client, ApiError } from './client';
 
-const client = new ClientClient({
+const client = new Client({
   baseURL: 'https://api.example.com',
   headers: {
     'Authorization': 'Bearer your-token-here'
