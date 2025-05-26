@@ -201,9 +201,9 @@ func main() {
 ### Python Client Usage
 
 ```python
-from clients import ClientClient, APIError
+from clients import Client, APIError
 
-client = ClientClient(
+client = Client(
     base_url="https://api.example.com",
     headers={"Authorization": "Bearer your-token"}
 )
@@ -222,9 +222,9 @@ except APIError as e:
 ### TypeScript Client Usage
 
 ```typescript
-import { ClientClient, ApiError } from './clients/client';
+import { Client, ApiError } from './clients/client';
 
-const client = new ClientClient({
+const client = new Client({
   baseURL: 'https://api.example.com',
   headers: {
     'Authorization': 'Bearer your-token'
