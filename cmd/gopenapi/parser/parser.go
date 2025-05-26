@@ -27,9 +27,17 @@ func parseSpecViaPackages(filename, varName string) (gopenapi.Spec, error) {
 	// Get the directory containing the file
 	dir := filepath.Dir(filename)
 
-	// Load the package
+	// Load the package with type information
 	cfg := &packages.Config{
-		Mode:  packages.LoadAllSyntax,
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps |
+			packages.NeedTypes |
+			packages.NeedTypesSizes |
+			packages.NeedSyntax |
+			packages.NeedTypesInfo,
 		Dir:   dir,
 		Fset:  token.NewFileSet(),
 		Tests: false,
@@ -567,6 +575,10 @@ func createReflectTypeFromGoTypesWithProcessing(t types.Type, processing map[typ
 		}
 	case *types.Struct:
 		return createStructTypeWithProcessing(typ, processing)
+	case nil:
+		// If type is nil, return interface{}
+		fmt.Fprintf(os.Stderr, "Warning: Encountered nil type, using interface{}\n")
+		return reflect.TypeOf((*interface{})(nil)).Elem()
 	default:
 		return getReflectTypeFromGoTypesTypeWithProcessing(t, processing)
 	}
@@ -616,10 +628,12 @@ func createStructTypeWithProcessing(structType *types.Struct, processing map[typ
 		// Use the recursive type resolution to properly handle named types
 		fieldType := createReflectTypeFromGoTypesWithProcessing(field.Type(), processing)
 
-		// Debug: Log field type information
+		// Debug: Log field type information if resolution failed
 		if fieldType.Kind() == reflect.Interface && field.Type() != nil {
-			// If we got interface{} but the original type wasn't interface, something went wrong
-			fmt.Fprintf(os.Stderr, "Warning: Field %s of type %v resolved to interface{}\n", field.Name(), field.Type())
+			// Check if the original type was not interface
+			if _, isInterface := field.Type().Underlying().(*types.Interface); !isInterface {
+				fmt.Fprintf(os.Stderr, "Warning: Field %s of type %v resolved to interface{}\n", field.Name(), field.Type())
+			}
 		}
 
 		fields[i] = reflect.StructField{
