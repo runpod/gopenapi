@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/runpod/gopenapi"
@@ -487,4 +488,545 @@ func patchUserHandler(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	gopenapi.WriteResponse(writer, 200, map[string]any{"name": user.Name})
+}
+
+func TestSchemaReferences(t *testing.T) {
+	// Define a Product struct for testing
+	type Product struct {
+		ID    int     `json:"id"`
+		Name  string  `json:"name"`
+		Price float64 `json:"price"`
+	}
+
+	schema := &gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:       "Test API with References",
+			Description: "Test API with schema references",
+			Version:     "1.0.0",
+		},
+		Components: gopenapi.Components{
+			Schemas: gopenapi.Schemas{
+				"User": {
+					Type: gopenapi.Object[User](),
+				},
+				"Product": {
+					Type: gopenapi.Object[Product](),
+				},
+				"UserRef": {
+					Ref: "#/components/schemas/User",
+				},
+			},
+		},
+		Paths: gopenapi.Paths{
+			"/products": {
+				Post: &gopenapi.Operation{
+					OperationId: "CreateProduct",
+					Summary:     "Create a product",
+					Security:    gopenapi.NoSecurity,
+					RequestBody: gopenapi.RequestBody{
+						Content: gopenapi.Content{
+							"application/json": {
+								Schema: gopenapi.Schema{
+									Ref: "#/components/schemas/Product",
+								},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						201: {
+							Description: "Created",
+							Content: gopenapi.Content{
+								"application/json": {
+									Schema: gopenapi.Schema{
+										Ref: "#/components/schemas/Product",
+									},
+								},
+							},
+						},
+					},
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						product := Product{}
+						err := gopenapi.ValidateRequestBody(r, &product)
+						if err != nil {
+							http.Error(w, err.Error(), http.StatusBadRequest)
+							return
+						}
+						gopenapi.WriteResponse(w, 201, product)
+					}),
+				},
+			},
+			"/users/{id}/profile": {
+				Get: &gopenapi.Operation{
+					OperationId: "GetUserProfile",
+					Summary:     "Get user profile using schema reference",
+					Security:    gopenapi.NoSecurity,
+					Parameters: gopenapi.Parameters{
+						{
+							Name: "id",
+							In:   gopenapi.InPath,
+							Schema: gopenapi.Schema{
+								Type: gopenapi.Integer,
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "OK",
+							Content: gopenapi.Content{
+								"application/json": {
+									Schema: gopenapi.Schema{
+										Ref: "#/components/schemas/User",
+									},
+								},
+							},
+						},
+					},
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						id := 0
+						err := gopenapi.ValidateRequestPathValue(r, "id", &id)
+						if err != nil {
+							http.Error(w, err.Error(), http.StatusBadRequest)
+							return
+						}
+						gopenapi.WriteResponse(w, 200, User{Name: "John Doe"})
+					}),
+				},
+			},
+			"/nested-ref-test": {
+				Get: &gopenapi.Operation{
+					OperationId: "TestNestedRef",
+					Summary:     "Test nested schema reference",
+					Security:    gopenapi.NoSecurity,
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "OK",
+							Content: gopenapi.Content{
+								"application/json": {
+									Schema: gopenapi.Schema{
+										Ref: "#/components/schemas/UserRef",
+									},
+								},
+							},
+						},
+					},
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						gopenapi.WriteResponse(w, 200, User{Name: "Jane Doe"})
+					}),
+				},
+			},
+		},
+		Servers: gopenapi.Servers{
+			{
+				URL:         "/",
+				Description: "Localhost",
+			},
+		},
+	}
+
+	server, err := gopenapi.NewServer(schema, "8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("create product with schema reference", func(t *testing.T) {
+		productJSON := `{"id": 1, "name": "Test Product", "price": 99.99}`
+		request, err := http.NewRequest("POST", "http://127.0.0.1:8080/products", bytes.NewBuffer([]byte(productJSON)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+
+		response := httptest.NewRecorder()
+		server.Handler.ServeHTTP(response, request)
+
+		if response.Code != http.StatusCreated {
+			t.Fatalf("Expected status code %d, got %d. Body: %s", http.StatusCreated, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("get user profile with schema reference", func(t *testing.T) {
+		request, err := http.NewRequest("GET", "http://127.0.0.1:8080/users/123/profile", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		response := httptest.NewRecorder()
+		server.Handler.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("Expected status code %d, got %d. Body: %s", http.StatusOK, response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("test nested schema reference", func(t *testing.T) {
+		request, err := http.NewRequest("GET", "http://127.0.0.1:8080/nested-ref-test", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		response := httptest.NewRecorder()
+		server.Handler.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("Expected status code %d, got %d. Body: %s", http.StatusOK, response.Code, response.Body.String())
+		}
+	})
+}
+
+func TestSchemaReferenceErrors(t *testing.T) {
+	t.Run("external reference not supported", func(t *testing.T) {
+		schema := &gopenapi.Spec{
+			OpenAPI: "3.0.0",
+			Info: gopenapi.Info{
+				Title:   "Test API",
+				Version: "1.0.0",
+			},
+			Components: gopenapi.Components{
+				Schemas: gopenapi.Schemas{
+					"User": {
+						Type: gopenapi.Object[User](),
+					},
+				},
+			},
+			Paths: gopenapi.Paths{
+				"/test": {
+					Get: &gopenapi.Operation{
+						Security: gopenapi.NoSecurity,
+						Responses: gopenapi.Responses{
+							200: {
+								Description: "OK",
+								Content: gopenapi.Content{
+									"application/json": {
+										Schema: gopenapi.Schema{
+											Ref: "external-file.json#/schemas/User",
+										},
+									},
+								},
+							},
+						},
+						Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+					},
+				},
+			},
+			Servers: gopenapi.Servers{
+				{URL: "/"},
+			},
+		}
+
+		_, err := gopenapi.NewServer(schema, "8080")
+		if err == nil {
+			t.Fatal("Expected error for external reference")
+		}
+		if !strings.Contains(err.Error(), "external references not supported") {
+			t.Fatalf("Expected error about external references not supported, got: %s", err.Error())
+		}
+	})
+
+	t.Run("missing schema reference", func(t *testing.T) {
+		schema := &gopenapi.Spec{
+			OpenAPI: "3.0.0",
+			Info: gopenapi.Info{
+				Title:   "Test API",
+				Version: "1.0.0",
+			},
+			Components: gopenapi.Components{
+				Schemas: gopenapi.Schemas{
+					"User": {
+						Type: gopenapi.Object[User](),
+					},
+				},
+			},
+			Paths: gopenapi.Paths{
+				"/test": {
+					Get: &gopenapi.Operation{
+						Security: gopenapi.NoSecurity,
+						Responses: gopenapi.Responses{
+							200: {
+								Description: "OK",
+								Content: gopenapi.Content{
+									"application/json": {
+										Schema: gopenapi.Schema{
+											Ref: "#/components/schemas/NonExistent",
+										},
+									},
+								},
+							},
+						},
+						Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+					},
+				},
+			},
+			Servers: gopenapi.Servers{
+				{URL: "/"},
+			},
+		}
+
+		_, err := gopenapi.NewServer(schema, "8080")
+		if err == nil {
+			t.Fatal("Expected error for missing schema reference")
+		}
+		if !strings.Contains(err.Error(), "schema not found") {
+			t.Fatalf("Expected error about schema not found, got: %s", err.Error())
+		}
+	})
+
+	t.Run("circular reference detection", func(t *testing.T) {
+		schema := &gopenapi.Spec{
+			OpenAPI: "3.0.0",
+			Info: gopenapi.Info{
+				Title:   "Test API",
+				Version: "1.0.0",
+			},
+			Components: gopenapi.Components{
+				Schemas: gopenapi.Schemas{
+					"A": {
+						Ref: "#/components/schemas/B",
+					},
+					"B": {
+						Ref: "#/components/schemas/A",
+					},
+				},
+			},
+			Paths: gopenapi.Paths{
+				"/test": {
+					Get: &gopenapi.Operation{
+						Security: gopenapi.NoSecurity,
+						Responses: gopenapi.Responses{
+							200: {
+								Description: "OK",
+								Content: gopenapi.Content{
+									"application/json": {
+										Schema: gopenapi.Schema{
+											Ref: "#/components/schemas/A",
+										},
+									},
+								},
+							},
+						},
+						Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+					},
+				},
+			},
+			Servers: gopenapi.Servers{
+				{URL: "/"},
+			},
+		}
+
+		_, err := gopenapi.NewServer(schema, "8080")
+		if err == nil {
+			t.Fatal("Expected error for circular reference")
+		}
+		// The error should indicate a problem with resolving nested references
+		if !strings.Contains(err.Error(), "failed to resolve") {
+			t.Fatalf("Expected error about failed resolution, got: %s", err.Error())
+		}
+	})
+
+	t.Run("invalid JSON pointer format", func(t *testing.T) {
+		schema := &gopenapi.Spec{
+			OpenAPI: "3.0.0",
+			Info: gopenapi.Info{
+				Title:   "Test API",
+				Version: "1.0.0",
+			},
+			Components: gopenapi.Components{
+				Schemas: gopenapi.Schemas{
+					"User": {
+						Type: gopenapi.Object[User](),
+					},
+				},
+			},
+			Paths: gopenapi.Paths{
+				"/test": {
+					Get: &gopenapi.Operation{
+						Security: gopenapi.NoSecurity,
+						Responses: gopenapi.Responses{
+							200: {
+								Description: "OK",
+								Content: gopenapi.Content{
+									"application/json": {
+										Schema: gopenapi.Schema{
+											Ref: "#/invalid/pointer",
+										},
+									},
+								},
+							},
+						},
+						Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}),
+					},
+				},
+			},
+			Servers: gopenapi.Servers{
+				{URL: "/"},
+			},
+		}
+
+		_, err := gopenapi.NewServer(schema, "8080")
+		if err == nil {
+			t.Fatal("Expected error for invalid JSON pointer")
+		}
+		if !strings.Contains(err.Error(), "unsupported JSON pointer root") {
+			t.Fatalf("Expected error about unsupported JSON pointer root, got: %s", err.Error())
+		}
+	})
+}
+
+func TestSchemaReferenceJSONSerialization(t *testing.T) {
+	// Test that schema references are preserved in JSON serialization
+	schema := &gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Test API",
+			Version: "1.0.0",
+		},
+		Components: gopenapi.Components{
+			Schemas: gopenapi.Schemas{
+				"User": {
+					Type: gopenapi.Object[User](),
+				},
+			},
+		},
+		Paths: gopenapi.Paths{
+			"/test": {
+				Get: &gopenapi.Operation{
+					Security: gopenapi.NoSecurity,
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "OK",
+							Content: gopenapi.Content{
+								"application/json": {
+									Schema: gopenapi.Schema{
+										Ref: "#/components/schemas/User",
+									},
+								},
+							},
+						},
+					},
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						gopenapi.WriteResponse(w, 200, User{Name: "Test"})
+					}),
+				},
+			},
+		},
+		Servers: gopenapi.Servers{
+			{URL: "/"},
+		},
+	}
+
+	// Create server to trigger reference resolution
+	_, err := gopenapi.NewServer(schema, "8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Serialize the spec to JSON
+	jsonBytes, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parse the JSON to verify the $ref is preserved
+	var parsed map[string]interface{}
+	err = json.Unmarshal(jsonBytes, &parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Navigate to the schema reference in the JSON
+	paths := parsed["paths"].(map[string]interface{})
+	testPath := paths["/test"].(map[string]interface{})
+	getOp := testPath["get"].(map[string]interface{})
+	responses := getOp["responses"].(map[string]interface{})
+	response200 := responses["200"].(map[string]interface{})
+	content := response200["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schemaObj := appJson["schema"].(map[string]interface{})
+
+	// Verify that the $ref field is preserved
+	ref, exists := schemaObj["$ref"]
+	if !exists {
+		t.Fatal("Expected $ref field to be preserved in JSON serialization")
+	}
+	if ref != "#/components/schemas/User" {
+		t.Fatalf("Expected $ref to be '#/components/schemas/User', got %s", ref)
+	}
+
+	// Verify that the schema was resolved internally (Type field should be set)
+	// We can't check this directly in JSON since Type is not serialized,
+	// but we can verify the resolution worked by checking that the server was created successfully
+	t.Log("Schema reference resolution and JSON serialization test passed")
+}
+
+func TestJSONPointerReferenceFormats(t *testing.T) {
+	// Test that various JSON Pointer reference formats work correctly
+	type Product struct {
+		ID   int    `json:"id"`
+		Name string `json:"name"`
+	}
+
+	schema := &gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Test API",
+			Version: "1.0.0",
+		},
+		Components: gopenapi.Components{
+			Schemas: gopenapi.Schemas{
+				"User": {
+					Type: gopenapi.Object[User](),
+				},
+				"Product": {
+					Type: gopenapi.Object[Product](),
+				},
+			},
+		},
+		Paths: gopenapi.Paths{
+			"/test-standard": {
+				Get: &gopenapi.Operation{
+					Security: gopenapi.NoSecurity,
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "OK",
+							Content: gopenapi.Content{
+								"application/json": {
+									Schema: gopenapi.Schema{
+										Ref: "#/components/schemas/User", // Standard format
+									},
+								},
+							},
+						},
+					},
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						gopenapi.WriteResponse(w, 200, User{Name: "Test User"})
+					}),
+				},
+			},
+		},
+		Servers: gopenapi.Servers{
+			{URL: "/"},
+		},
+	}
+
+	// Create server to trigger reference resolution
+	server, err := gopenapi.NewServer(schema, "8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("standard components schema reference", func(t *testing.T) {
+		request, err := http.NewRequest("GET", "http://127.0.0.1:8080/test-standard", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		response := httptest.NewRecorder()
+		server.Handler.ServeHTTP(response, request)
+
+		if response.Code != http.StatusOK {
+			t.Fatalf("Expected status code %d, got %d. Body: %s", http.StatusOK, response.Code, response.Body.String())
+		}
+	})
+
+	t.Log("JSON Pointer reference formats test passed")
 }

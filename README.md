@@ -1,16 +1,19 @@
 # gopenapi
 
-`gopenapi` is a Go library for building OpenAPI-compliant HTTP services and generating HTTP clients. It provides tools for defining your API using OpenAPI specifications and handles request validation, routing, response generation, and client code generation.
+`gopenapi` is a Go library for building OpenAPI-compliant HTTP services and generating HTTP clients. It provides tools for defining your API using OpenAPI specifications and handles request validation, routing, response generation, client code generation, and OpenAPI JSON specification export.
 
 ## Features
 
-*   OpenAPI 3.0.x support
-*   Request validation
-*   Response generation
-*   Middleware support
-*   Automatic schema generation from Go types
-*   Cross-platform client generation (Windows, macOS, Linux)
-*   AST-based Go file parsing (no CGO required)
+*   **OpenAPI 3.0.x support** - Full compliance with OpenAPI specification
+*   **Request validation** - Automatic parameter and request body validation
+*   **Response generation** - Type-safe response handling
+*   **Middleware support** - Extensible middleware system for authentication and validation
+*   **Automatic schema generation** - Generate schemas from Go types using reflection
+*   **OpenAPI JSON export** - Convert Go specifications to standard OpenAPI JSON format
+*   **Multi-language client generation** - Generate clients for Go, Python, and TypeScript
+*   **Cross-platform support** - Works on Windows, macOS, and Linux
+*   **AST-based parsing** - Parse Go files without CGO requirements
+*   **Type-safe error handling** - Structured error types with detailed information
 
 ## Installation
 
@@ -28,7 +31,39 @@ go get github.com/runpod/gopenapi
 
 ## CLI Usage
 
-The `gopenapi` command-line tool can generate HTTP clients in multiple languages from OpenAPI specifications.
+The `gopenapi` command-line tool provides two main capabilities:
+1. **Generate OpenAPI JSON specifications** from Go code
+2. **Generate HTTP clients** in multiple languages from OpenAPI specifications
+
+### Commands
+
+```bash
+# Generate OpenAPI JSON specification
+gopenapi generate spec [flags]
+
+# Generate API clients
+gopenapi generate client [flags]
+
+# Show help
+gopenapi help
+```
+
+### Generate OpenAPI JSON Specification
+
+Convert your Go OpenAPI specification to standard OpenAPI JSON format:
+
+```bash
+# Generate to file
+gopenapi generate spec -spec examples/spec/spec.go -var ExampleSpec -output openapi.json
+
+# Generate to stdout
+gopenapi generate spec -spec examples/spec/spec.go -var ExampleSpec
+```
+
+**Flags for `generate spec`:**
+- `-spec` - Go file containing the OpenAPI spec (required)
+- `-var` - Variable name containing the spec (required, e.g., 'ExampleSpec')
+- `-output` - Output file for OpenAPI JSON (if empty, outputs to stdout)
 
 ### Generate Clients from Go Files
 
@@ -91,24 +126,27 @@ Then generate clients:
 
 ```bash
 # Generate clients for all supported languages
-gopenapi -spec api_spec.go -var MyAPISpec -languages=go,python,typescript -output=./clients
+gopenapi generate client -spec api_spec.go -var MyAPISpec -languages go,python,typescript -output ./clients
 
 # Generate only Go client
-gopenapi -spec api_spec.go -var MyAPISpec -languages=go -output=./clients
+gopenapi generate client -spec api_spec.go -var MyAPISpec -languages go -output ./clients
 
 # Generate only Python client  
-gopenapi -spec api_spec.go -var MyAPISpec -languages=python -output=./clients
+gopenapi generate client -spec api_spec.go -var MyAPISpec -languages python -output ./clients
 
 # Generate only TypeScript client
-gopenapi -spec api_spec.go -var MyAPISpec -languages=typescript -output=./clients
+gopenapi generate client -spec api_spec.go -var MyAPISpec -languages typescript -output ./clients
+
+# Generate to stdout (single language only)
+gopenapi generate client -spec api_spec.go -var MyAPISpec -languages go
 ```
 
-### Command Line Options
-
+**Flags for `generate client`:**
 - `-spec` - Go file containing the OpenAPI spec (required)
 - `-var` - Variable name containing the spec (required, e.g., 'ExampleSpec')
-- `-languages` - Comma-separated list of languages to generate (go,python,typescript)
-- `-output` - Output directory for generated clients (default: current directory)
+- `-languages` - Comma-separated list of languages to generate (default: go)
+  - Supported languages: `go`, `python`, `typescript`
+- `-output` - Output directory for generated clients (if empty, outputs to stdout)
 - `-package` - Package name for generated code (default: client)
 
 ### Generated Client Features
@@ -118,7 +156,9 @@ gopenapi -spec api_spec.go -var MyAPISpec -languages=typescript -output=./client
 - Context support for request cancellation
 - Automatic JSON marshaling/unmarshaling
 - Configurable HTTP client
-- Error handling with detailed error information
+- Structured error handling with detailed error information
+- Support for path, query, and header parameters
+- Request body validation
 
 **Python Client:**
 - Type hints for better IDE support
@@ -135,6 +175,58 @@ gopenapi -spec api_spec.go -var MyAPISpec -languages=typescript -output=./client
 - Automatic JSON serialization/deserialization
 - Proper error handling with custom ApiError class
 - Support for both Node.js and browser environments
+
+### Error Handling
+
+All generated clients include comprehensive error handling:
+
+- **Structured Error Types**: Custom error types with HTTP status codes, messages, and raw response bodies
+- **Consistent Error Handling**: All operations handle HTTP errors consistently across languages
+- **Detailed Error Information**: Access to status codes, error messages, and raw response data
+- **Type-Safe Error Responses**: Proper typing for error scenarios in all supported languages
+
+### Go Client Usage Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    
+    "your-module/client" // Replace with your generated client import
+)
+
+func main() {
+    client := client.NewClient("https://api.example.com")
+    
+    // Type-safe API call with error handling
+    user, err := client.GetUserById(context.Background(), client.GetUserByIdOptions{
+        Path: client.GetUserByIdPath{
+            Id: 123,
+        },
+        Query: client.GetUserByIdQuery{
+            Include: "profile",
+        },
+        Headers: client.GetUserByIdHeaders{
+            Authorization: "Bearer your-token",
+        },
+    })
+    
+    if err != nil {
+        // Handle structured error
+        if apiErr, ok := err.(*client.Error); ok {
+            fmt.Printf("API Error %d: %s\n", apiErr.StatusCode, apiErr.Message)
+        } else {
+            log.Fatal("Network error:", err)
+        }
+        return
+    }
+    
+    fmt.Printf("User: %+v\n", user)
+}
+```
 
 ### TypeScript Usage Example
 
@@ -280,7 +372,21 @@ func main() {
 }
 ```
 
-*(This is a more detailed example based on your tests. You'll need to adapt it to your specific needs and project structure, and ensure the import paths are correct.)*
+## Testing
+
+The project includes comprehensive test coverage for all functionality:
+
+- **Client Generation Tests**: Verify client generation for all supported languages
+- **Error Handling Tests**: Ensure consistent error handling across all operations
+- **OpenAPI JSON Generation Tests**: Validate OpenAPI JSON output format and structure
+- **Type Resolution Tests**: Test proper handling of Go types including named types with primitive underlying types
+- **CLI Tests**: Verify command-line interface functionality and help system
+
+Run tests with:
+
+```bash
+go test ./...
+```
 
 ## Contributing
 

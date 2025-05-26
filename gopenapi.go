@@ -203,6 +203,11 @@ func (s Schema) MarshalJSON() ([]byte, error) {
 }
 
 func (s Schema) Validate(value string) (any, error) {
+	// If this schema has a resolved reference, use the resolved schema
+	if s.Ref != "" && s.Type == nil {
+		return nil, fmt.Errorf("gopenapi: unresolved schema reference %s", s.Ref)
+	}
+
 	switch s.Type {
 	case String:
 		return value, nil
@@ -219,7 +224,6 @@ func (s Schema) Validate(value string) (any, error) {
 		}
 		return v, nil
 	}
-
 }
 
 type Parameters []Parameter
@@ -467,7 +471,9 @@ func handle(spec *Spec, operation *Operation) (http.HandlerFunc, error) {
 		handler = middlewareHandler(handler)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(context.WithValue(r.Context(), OperationKey, operation))
+		ctx := context.WithValue(r.Context(), OperationKey, operation)
+		ctx = context.WithValue(ctx, SpecKey, spec)
+		r = r.WithContext(ctx)
 		handler.ServeHTTP(w, r)
 	}, nil
 }
@@ -512,6 +518,10 @@ func NewServerMux(spec *Spec) (http.Handler, error) {
 				}
 			}
 		}
+	}
+	// resolve references here
+	if err := resolveRefs(spec); err != nil {
+		return nil, fmt.Errorf("failed to resolve schema references: %w", err)
 	}
 	return mux, nil
 }
@@ -577,4 +587,140 @@ func OperationFromRequest(r *http.Request) (*Operation, bool) {
 func WriteResponse(w http.ResponseWriter, status int, body any) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
+}
+
+// resolveRefs resolves all schema references in the spec
+func resolveRefs(spec *Spec) error {
+	// Track which schemas are being resolved to detect circular references
+	resolving := make(map[string]bool)
+
+	// Resolve references in operation parameters
+	for pathPattern, path := range spec.Paths {
+		operations := []*Operation{
+			path.Get, path.Post, path.Put, path.Delete,
+			path.Patch, path.Head, path.Options, path.Trace,
+		}
+
+		for _, operation := range operations {
+			if operation == nil {
+				continue
+			}
+
+			// Resolve parameter schema references
+			for i := range operation.Parameters {
+				if err := resolveSchemaRefWithTracking(&operation.Parameters[i].Schema, spec, resolving); err != nil {
+					return fmt.Errorf("failed to resolve parameter schema ref in %s: %w", pathPattern, err)
+				}
+			}
+
+			// Resolve request body schema references
+			for mediaType, content := range operation.RequestBody.Content {
+				if err := resolveSchemaRefWithTracking(&content.Schema, spec, resolving); err != nil {
+					return fmt.Errorf("failed to resolve request body schema ref for %s in %s: %w", mediaType, pathPattern, err)
+				}
+				// Update the content in the map since we modified the schema
+				operation.RequestBody.Content[mediaType] = content
+			}
+
+			// Resolve response schema references
+			for statusCode, response := range operation.Responses {
+				for mediaType, content := range response.Content {
+					if err := resolveSchemaRefWithTracking(&content.Schema, spec, resolving); err != nil {
+						return fmt.Errorf("failed to resolve response schema ref for status %d, media type %s in %s: %w", statusCode, mediaType, pathPattern, err)
+					}
+					// Update the content in the map since we modified the schema
+					response.Content[mediaType] = content
+				}
+				// Update the response in the map since we modified the content
+				operation.Responses[statusCode] = response
+			}
+		}
+	}
+
+	return nil
+}
+
+// resolveSchemaRefWithTracking resolves a single schema reference with circular reference detection
+func resolveSchemaRefWithTracking(schema *Schema, spec *Spec, resolving map[string]bool) error {
+	if schema.Ref == "" {
+		return nil
+	}
+
+	// Only handle local references (starting with #)
+	if !strings.HasPrefix(schema.Ref, "#") {
+		return fmt.Errorf("external references not supported: %s", schema.Ref)
+	}
+
+	// Check for circular reference
+	if resolving[schema.Ref] {
+		return fmt.Errorf("circular reference detected for: %s", schema.Ref)
+	}
+
+	// Mark this reference as being resolved
+	resolving[schema.Ref] = true
+	defer delete(resolving, schema.Ref)
+
+	// Resolve the reference using JSON Pointer
+	referencedSchema, err := resolveJSONPointer(spec, schema.Ref)
+	if err != nil {
+		return fmt.Errorf("failed to resolve reference %s: %w", schema.Ref, err)
+	}
+
+	// Recursively resolve the referenced schema if it also has a reference
+	if err := resolveSchemaRefWithTracking(&referencedSchema, spec, resolving); err != nil {
+		return fmt.Errorf("failed to resolve nested reference in %s: %w", schema.Ref, err)
+	}
+
+	// Copy the resolved schema properties to the current schema
+	// Keep the original Ref for JSON serialization, but copy the Type for validation
+	schema.Type = referencedSchema.Type
+	if len(referencedSchema.Enum) > 0 {
+		schema.Enum = referencedSchema.Enum
+	}
+	if referencedSchema.Default != nil {
+		schema.Default = referencedSchema.Default
+	}
+	if referencedSchema.Example != nil {
+		schema.Example = referencedSchema.Example
+	}
+	if len(referencedSchema.Examples) > 0 {
+		schema.Examples = referencedSchema.Examples
+	}
+
+	return nil
+}
+
+// resolveJSONPointer resolves a JSON Pointer reference within the spec
+func resolveJSONPointer(spec *Spec, ref string) (Schema, error) {
+	// Remove the # prefix
+	pointer := strings.TrimPrefix(ref, "#")
+	if pointer == "" {
+		return Schema{}, fmt.Errorf("empty JSON pointer")
+	}
+
+	// Split the pointer into segments
+	segments := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	if len(segments) == 0 {
+		return Schema{}, fmt.Errorf("invalid JSON pointer: %s", ref)
+	}
+
+	// Navigate through the spec based on the pointer segments
+	switch segments[0] {
+	case "components":
+		if len(segments) < 3 {
+			return Schema{}, fmt.Errorf("invalid components reference: %s", ref)
+		}
+		switch segments[1] {
+		case "schemas":
+			schemaName := segments[2]
+			if referencedSchema, exists := spec.Components.Schemas[schemaName]; exists {
+				return referencedSchema, nil
+			}
+			return Schema{}, fmt.Errorf("schema not found: %s", schemaName)
+		default:
+			return Schema{}, fmt.Errorf("unsupported components reference: %s", ref)
+		}
+	default:
+		return Schema{}, fmt.Errorf("unsupported JSON pointer root: %s", segments[0])
+	}
 }

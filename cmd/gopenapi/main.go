@@ -2,12 +2,14 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -69,17 +71,172 @@ type FieldData struct {
 }
 
 func main() {
-	var (
-		specFile    = flag.String("spec", "", "Go file containing the OpenAPI spec (required)")
-		specVar     = flag.String("var", "", "Variable name containing the spec (required, e.g., 'ExampleSpec')")
-		outputDir   = flag.String("output", ".", "Output directory for generated clients")
-		packageName = flag.String("package", "client", "Package name for generated code")
-		languages   = flag.String("languages", "go", "Comma-separated list of languages to generate (go,python,typescript)")
-	)
-	flag.Parse()
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	command := os.Args[1]
+	switch command {
+	case "generate":
+		if len(os.Args) < 3 {
+			printGenerateUsage()
+			os.Exit(1)
+		}
+		subcommand := os.Args[2]
+		switch subcommand {
+		case "spec":
+			generateSpecCommand()
+		case "client":
+			generateClientCommand()
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown generate subcommand: %s\n\n", subcommand)
+			printGenerateUsage()
+			os.Exit(1)
+		}
+	case "help", "-h", "--help":
+		printUsage()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr, `gopenapi - OpenAPI code generation tool
+
+Usage:
+  gopenapi generate spec [flags]    Generate OpenAPI JSON specification
+  gopenapi generate client [flags]  Generate API clients
+  gopenapi help                     Show this help message
+
+Use "gopenapi generate <subcommand> -help" for more information about a subcommand.
+`)
+}
+
+func printGenerateUsage() {
+	fmt.Fprintf(os.Stderr, `Usage:
+  gopenapi generate spec [flags]    Generate OpenAPI JSON specification
+  gopenapi generate client [flags]  Generate API clients
+
+Use "gopenapi generate <subcommand> -help" for more information about a subcommand.
+`)
+}
+
+func generateSpecCommand() {
+	fs := flag.NewFlagSet("generate spec", flag.ExitOnError)
+	specFile := fs.String("spec", "", "Go file containing the OpenAPI spec (required)")
+	specVar := fs.String("var", "", "Variable name containing the spec (required, e.g., 'ExampleSpec')")
+	output := fs.String("output", "", "Output file for OpenAPI JSON (if empty, outputs to stdout)")
+	help := fs.Bool("help", false, "Show help information")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Generate OpenAPI JSON specification from Go code
+
+Usage:
+  gopenapi generate spec [flags]
+
+Flags:
+  -spec string
+        Go file containing the OpenAPI spec (required)
+  -var string
+        Variable name containing the spec (required, e.g., 'ExampleSpec')
+  -output string
+        Output file for OpenAPI JSON (if empty, outputs to stdout)
+  -help
+        Show this help message
+
+Examples:
+  gopenapi generate spec -spec examples/spec/spec.go -var ExampleSpec -output openapi.json
+  gopenapi generate spec -spec examples/spec/spec.go -var ExampleSpec
+`)
+	}
+
+	fs.Parse(os.Args[3:])
+
+	if *help {
+		fs.Usage()
+		return
+	}
 
 	if *specFile == "" || *specVar == "" {
-		log.Fatal("Both -spec and -var flags are required")
+		fmt.Fprintf(os.Stderr, "Error: Both -spec and -var flags are required\n\n")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	spec, err := parseSpecFromFile(*specFile, *specVar)
+	if err != nil {
+		log.Fatalf("Failed to parse spec from file: %v", err)
+	}
+
+	// Convert spec to OpenAPI JSON
+	jsonData, err := specToOpenAPIJSON(&spec)
+	if err != nil {
+		log.Fatalf("Failed to convert spec to OpenAPI JSON: %v", err)
+	}
+
+	// Output to file or stdout
+	if *output == "" {
+		fmt.Print(string(jsonData))
+	} else {
+		err := os.WriteFile(*output, jsonData, 0644)
+		if err != nil {
+			log.Fatalf("Failed to write OpenAPI JSON to file: %v", err)
+		}
+		fmt.Printf("Generated OpenAPI JSON specification: %s\n", *output)
+	}
+}
+
+func generateClientCommand() {
+	fs := flag.NewFlagSet("generate client", flag.ExitOnError)
+	specFile := fs.String("spec", "", "Go file containing the OpenAPI spec (required)")
+	specVar := fs.String("var", "", "Variable name containing the spec (required, e.g., 'ExampleSpec')")
+	outputDir := fs.String("output", "", "Output directory for generated clients (if empty, outputs to stdout)")
+	packageName := fs.String("package", "client", "Package name for generated code")
+	languages := fs.String("languages", "go", "Comma-separated list of languages to generate (go,python,typescript)")
+	help := fs.Bool("help", false, "Show help information")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Generate API clients from OpenAPI specification
+
+Usage:
+  gopenapi generate client [flags]
+
+Flags:
+  -spec string
+        Go file containing the OpenAPI spec (required)
+  -var string
+        Variable name containing the spec (required, e.g., 'ExampleSpec')
+  -output string
+        Output directory for generated clients (if empty, outputs to stdout)
+  -package string
+        Package name for generated code (default "client")
+  -languages string
+        Comma-separated list of languages to generate (default "go")
+        Supported languages: go, python, typescript
+  -help
+        Show this help message
+
+Examples:
+  gopenapi generate client -spec examples/spec/spec.go -var ExampleSpec -output ./clients
+  gopenapi generate client -spec examples/spec/spec.go -var ExampleSpec -languages go,python
+  gopenapi generate client -spec examples/spec/spec.go -var ExampleSpec -package myclient
+`)
+	}
+
+	fs.Parse(os.Args[3:])
+
+	if *help {
+		fs.Usage()
+		return
+	}
+
+	if *specFile == "" || *specVar == "" {
+		fmt.Fprintf(os.Stderr, "Error: Both -spec and -var flags are required\n\n")
+		fs.Usage()
+		os.Exit(1)
 	}
 
 	spec, err := parseSpecFromFile(*specFile, *specVar)
@@ -93,7 +250,26 @@ func main() {
 		langs[i] = strings.TrimSpace(lang)
 	}
 
-	// Generate clients for each language
+	// Validate languages
+	for _, lang := range langs {
+		if lang != "go" && lang != "python" && lang != "typescript" {
+			log.Fatalf("Unsupported language: %s. Supported languages: go, python, typescript", lang)
+		}
+	}
+
+	// If output directory is not specified, output to stdout (only works for single language)
+	if *outputDir == "" {
+		if len(langs) > 1 {
+			log.Fatal("Cannot output multiple languages to stdout. Please specify -output directory or use single language.")
+		}
+		err := generateClientToStdout(&spec, langs[0], *packageName)
+		if err != nil {
+			log.Fatalf("Failed to generate %s client: %v", langs[0], err)
+		}
+		return
+	}
+
+	// Generate clients for each language to files
 	for _, lang := range langs {
 		err := generateClientForLanguage(&spec, lang, *outputDir, *packageName)
 		if err != nil {
@@ -242,6 +418,230 @@ func parseSpecFromASTWithTypes(lit *ast.CompositeLit, pkg *packages.Package) (go
 	}
 
 	return spec, nil
+}
+
+// specToOpenAPIJSON converts a gopenapi.Spec to OpenAPI JSON format
+func specToOpenAPIJSON(spec *gopenapi.Spec) ([]byte, error) {
+	// Create OpenAPI JSON structure
+	openAPISpec := map[string]interface{}{
+		"openapi": spec.OpenAPI,
+		"info": map[string]interface{}{
+			"title":       spec.Info.Title,
+			"description": spec.Info.Description,
+			"version":     spec.Info.Version,
+		},
+	}
+
+	// Add servers if present
+	if len(spec.Servers) > 0 {
+		servers := make([]map[string]interface{}, len(spec.Servers))
+		for i, server := range spec.Servers {
+			servers[i] = map[string]interface{}{
+				"url":         server.URL,
+				"description": server.Description,
+			}
+		}
+		openAPISpec["servers"] = servers
+	}
+
+	// Add paths
+	if len(spec.Paths) > 0 {
+		paths := make(map[string]interface{})
+		for path, pathItem := range spec.Paths {
+			pathObj := make(map[string]interface{})
+
+			// Add operations for each HTTP method
+			if pathItem.Get != nil {
+				pathObj["get"] = operationToJSON(pathItem.Get)
+			}
+			if pathItem.Post != nil {
+				pathObj["post"] = operationToJSON(pathItem.Post)
+			}
+			if pathItem.Put != nil {
+				pathObj["put"] = operationToJSON(pathItem.Put)
+			}
+			if pathItem.Delete != nil {
+				pathObj["delete"] = operationToJSON(pathItem.Delete)
+			}
+			if pathItem.Patch != nil {
+				pathObj["patch"] = operationToJSON(pathItem.Patch)
+			}
+			if pathItem.Head != nil {
+				pathObj["head"] = operationToJSON(pathItem.Head)
+			}
+			if pathItem.Options != nil {
+				pathObj["options"] = operationToJSON(pathItem.Options)
+			}
+
+			paths[path] = pathObj
+		}
+		openAPISpec["paths"] = paths
+	}
+
+	// Marshal to JSON with proper indentation
+	return json.MarshalIndent(openAPISpec, "", "  ")
+}
+
+// operationToJSON converts a gopenapi.Operation to JSON format
+func operationToJSON(op *gopenapi.Operation) map[string]interface{} {
+	operation := map[string]interface{}{}
+
+	if op.OperationId != "" {
+		operation["operationId"] = op.OperationId
+	}
+	if op.Summary != "" {
+		operation["summary"] = op.Summary
+	}
+	if op.Description != "" {
+		operation["description"] = op.Description
+	}
+
+	// Add parameters
+	if len(op.Parameters) > 0 {
+		params := make([]map[string]interface{}, len(op.Parameters))
+		for i, param := range op.Parameters {
+			paramObj := map[string]interface{}{
+				"name":        param.Name,
+				"in":          parameterLocationToString(param.In),
+				"required":    param.Required,
+				"description": param.Description,
+				"schema":      schemaToJSON(param.Schema),
+			}
+			params[i] = paramObj
+		}
+		operation["parameters"] = params
+	}
+
+	// Add request body
+	if op.RequestBody.Content != nil {
+		requestBody := map[string]interface{}{
+			"required": op.RequestBody.Required,
+			"content":  contentToJSON(op.RequestBody.Content),
+		}
+		operation["requestBody"] = requestBody
+	}
+
+	// Add responses
+	if len(op.Responses) > 0 {
+		responses := make(map[string]interface{})
+		for statusCode, response := range op.Responses {
+			responseObj := map[string]interface{}{
+				"description": response.Description,
+			}
+			if response.Content != nil {
+				responseObj["content"] = contentToJSON(response.Content)
+			}
+			responses[fmt.Sprintf("%d", statusCode)] = responseObj
+		}
+		operation["responses"] = responses
+	}
+
+	return operation
+}
+
+// parameterLocationToString converts parameter location to string
+func parameterLocationToString(location gopenapi.In) string {
+	switch location {
+	case gopenapi.InPath:
+		return "path"
+	case gopenapi.InQuery:
+		return "query"
+	case gopenapi.InHeader:
+		return "header"
+	case gopenapi.InCookie:
+		return "cookie"
+	default:
+		return "query"
+	}
+}
+
+// schemaToJSON converts a gopenapi.Schema to JSON format
+func schemaToJSON(schema gopenapi.Schema) map[string]interface{} {
+	schemaObj := map[string]interface{}{}
+
+	if schema.Type != nil {
+		switch schema.Type {
+		case gopenapi.String:
+			schemaObj["type"] = "string"
+		case gopenapi.Integer:
+			schemaObj["type"] = "integer"
+		case gopenapi.Number:
+			schemaObj["type"] = "number"
+		case gopenapi.Boolean:
+			schemaObj["type"] = "boolean"
+		case gopenapi.Array:
+			schemaObj["type"] = "array"
+		default:
+			// For complex types (structs), use object type
+			if schema.Type.Kind() == reflect.Struct {
+				schemaObj["type"] = "object"
+				// Add properties based on struct fields
+				properties := make(map[string]interface{})
+				for i := 0; i < schema.Type.NumField(); i++ {
+					field := schema.Type.Field(i)
+					if !field.IsExported() {
+						continue
+					}
+
+					jsonTag := field.Tag.Get("json")
+					fieldName := field.Name
+					if jsonTag != "" {
+						parts := strings.Split(jsonTag, ",")
+						if parts[0] != "" && parts[0] != "-" {
+							fieldName = parts[0]
+						}
+					}
+
+					properties[fieldName] = map[string]interface{}{
+						"type": goTypeToOpenAPIType(field.Type),
+					}
+				}
+				if len(properties) > 0 {
+					schemaObj["properties"] = properties
+				}
+			} else {
+				schemaObj["type"] = goTypeToOpenAPIType(schema.Type)
+			}
+		}
+	}
+
+	return schemaObj
+}
+
+// contentToJSON converts gopenapi.Content to JSON format
+func contentToJSON(content gopenapi.Content) map[string]interface{} {
+	contentObj := make(map[string]interface{})
+
+	for mediaType, mediaTypeObj := range content {
+		contentObj[string(mediaType)] = map[string]interface{}{
+			"schema": schemaToJSON(mediaTypeObj.Schema),
+		}
+	}
+
+	return contentObj
+}
+
+// goTypeToOpenAPIType converts Go reflect.Type to OpenAPI type string
+func goTypeToOpenAPIType(t reflect.Type) string {
+	switch t.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "integer"
+	case reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Slice, reflect.Array:
+		return "array"
+	case reflect.Struct:
+		return "object"
+	case reflect.Ptr:
+		return goTypeToOpenAPIType(t.Elem())
+	default:
+		return "object"
+	}
 }
 
 // parsePathsFromASTWithTypes parses gopenapi.Paths from AST with type resolution
@@ -1295,6 +1695,25 @@ func parseRequestBodyFromAST(lit *ast.CompositeLit, fset *token.FileSet, src []b
 	return requestBody, nil
 }
 
+// generateClientToStdout generates a client for the specified language and outputs to stdout
+func generateClientToStdout(spec *gopenapi.Spec, language, packageName string) error {
+	// Determine template file based on language
+	var templateFile string
+
+	switch language {
+	case "go":
+		templateFile = "templates/go.tpl"
+	case "python":
+		templateFile = "templates/python.tpl"
+	case "typescript":
+		templateFile = "templates/typescript.tpl"
+	default:
+		return fmt.Errorf("unsupported language: %s", language)
+	}
+
+	return GenerateClientToWriter(spec, os.Stdout, packageName, templateFile, language)
+}
+
 // generateClientForLanguage generates a client for the specified language
 func generateClientForLanguage(spec *gopenapi.Spec, language, outputDir, packageName string) error {
 	// Determine template file and output file based on language
@@ -1317,8 +1736,8 @@ func generateClientForLanguage(spec *gopenapi.Spec, language, outputDir, package
 	return GenerateClient(spec, outputFile, packageName, templateFile, language)
 }
 
-// GenerateClient generates a client from a gopenapi.Spec
-func GenerateClient(spec *gopenapi.Spec, outputFile, packageName, templateFile, language string) error {
+// GenerateClientToWriter generates a client from a gopenapi.Spec and writes to the provided writer
+func GenerateClientToWriter(spec *gopenapi.Spec, writer io.Writer, packageName, templateFile, language string) error {
 	// Load template from embedded filesystem
 	tmplContent, err := templateFS.ReadFile(templateFile)
 	if err != nil {
@@ -1334,6 +1753,16 @@ func GenerateClient(spec *gopenapi.Spec, outputFile, packageName, templateFile, 
 	// Generate template data
 	templateData := generateTemplateData(spec, packageName, language)
 
+	// Execute template
+	if err := tmpl.Execute(writer, templateData); err != nil {
+		return fmt.Errorf("failed to execute template: %w", err)
+	}
+
+	return nil
+}
+
+// GenerateClient generates a client from a gopenapi.Spec
+func GenerateClient(spec *gopenapi.Spec, outputFile, packageName, templateFile, language string) error {
 	// Create output directory
 	outputDir := filepath.Dir(outputFile)
 	if outputDir != "." {
@@ -1349,12 +1778,8 @@ func GenerateClient(spec *gopenapi.Spec, outputFile, packageName, templateFile, 
 	}
 	defer outFile.Close()
 
-	// Execute template
-	if err := tmpl.Execute(outFile, templateData); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return nil
+	// Use the writer-based function
+	return GenerateClientToWriter(spec, outFile, packageName, templateFile, language)
 }
 
 // getTemplateFuncs returns template functions for the specified language
