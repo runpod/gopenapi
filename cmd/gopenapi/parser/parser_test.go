@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/runpod/gopenapi"
+	"github.com/runpod/gopenapi/cmd/gopenapi/parser/internal/company"
 	"github.com/runpod/gopenapi/cmd/gopenapi/parser/internal/mock"
 )
 
@@ -1684,4 +1685,266 @@ func TestDeeplyNestedStructResolution(t *testing.T) {
 	}
 
 	t.Log("Successfully resolved deeply nested struct types (3 levels deep)")
+}
+
+// Test deeply nested cross-package type resolution
+func TestDeeplyNestedCrossPackageTypes(t *testing.T) {
+	// This test uses the company.CompanyReport type which has deep nesting across multiple packages:
+	// CompanyReport -> Company -> Department -> Team -> Project -> Milestone
+	// CompanyReport -> Employee -> ContactInfo -> Address
+	// CompanyReport -> Employee -> ContactInfo -> EmergencyContact
+	// CompanyReport -> Employee -> Skills -> Competency -> Language
+
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Deeply Nested Cross-Package API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/company-report": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "getCompanyReport",
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Company report with deeply nested types",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[company.CompanyReport]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Print the JSON for debugging
+	t.Logf("Generated JSON (first 2000 chars):\n%s", string(jsonData[:min(len(jsonData), 2000)]))
+
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to the response schema
+	paths := result["paths"].(map[string]interface{})
+	reportPath := paths["/company-report"].(map[string]interface{})
+	getOp := reportPath["get"].(map[string]interface{})
+	responses := getOp["responses"].(map[string]interface{})
+	resp200 := responses["200"].(map[string]interface{})
+	content := resp200["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+
+	// Check CompanyReport properties
+	properties, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("CompanyReport should have properties")
+	}
+
+	// Check that company field exists and is an object
+	companyProp, ok := properties["company"].(map[string]interface{})
+	if !ok {
+		t.Fatal("CompanyReport should have 'company' property")
+	}
+	if companyProp["type"] != "object" {
+		t.Errorf("Expected company type to be 'object', got %v", companyProp["type"])
+	}
+
+	// Check company has nested properties
+	companyProps, ok := companyProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Company should have properties")
+	}
+
+	// Check departments array
+	departmentsProp, ok := companyProps["departments"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Company should have 'departments' property")
+	}
+	if departmentsProp["type"] != "array" {
+		t.Errorf("Expected departments type to be 'array', got %v", departmentsProp["type"])
+	}
+
+	// Check CEO (Employee type) has deep nesting
+	ceoProp, ok := companyProps["ceo"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Company should have 'ceo' property")
+	}
+	if ceoProp["type"] != "object" {
+		t.Errorf("Expected ceo type to be 'object', got %v", ceoProp["type"])
+	}
+
+	// Navigate deep into CEO -> contact -> address
+	ceoProps, ok := ceoProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("CEO should have properties")
+	}
+
+	contactProp, ok := ceoProps["contact"].(map[string]interface{})
+	if !ok {
+		t.Fatal("CEO should have 'contact' property")
+	}
+
+	contactProps, ok := contactProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Contact should have properties")
+	}
+
+	addressProp, ok := contactProps["address"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Contact should have 'address' property")
+	}
+
+	addressProps, ok := addressProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Address should have properties")
+	}
+
+	// Verify address fields are resolved
+	streetProp, ok := addressProps["street"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Address should have 'street' property")
+	}
+	if streetProp["type"] != "string" {
+		t.Errorf("Expected street type to be 'string', got %v", streetProp["type"])
+	}
+
+	// Check headquarters -> coords (multiple levels of local nesting)
+	headquartersProp, ok := companyProps["headquarters"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Company should have 'headquarters' property")
+	}
+
+	hqProps, ok := headquartersProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Headquarters should have properties")
+	}
+
+	coordsProp, ok := hqProps["coords"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Headquarters should have 'coords' property")
+	}
+
+	coordsProps, ok := coordsProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Coords should have properties")
+	}
+
+	latProp, ok := coordsProps["latitude"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Coords should have 'latitude' property")
+	}
+	if latProp["type"] != "number" {
+		t.Errorf("Expected latitude type to be 'number', got %v", latProp["type"])
+	}
+
+	// Test performance -> budget_health (cross-package deep nesting)
+	perfProp, ok := properties["performance"].(map[string]interface{})
+	if !ok {
+		t.Fatal("CompanyReport should have 'performance' property")
+	}
+
+	perfProps, ok := perfProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Performance should have properties")
+	}
+
+	budgetHealthProp, ok := perfProps["budget_health"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Performance should have 'budget_health' property")
+	}
+
+	budgetHealthProps, ok := budgetHealthProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("BudgetHealth should have properties")
+	}
+
+	projectionsProp, ok := budgetHealthProps["projections"].(map[string]interface{})
+	if !ok {
+		t.Fatal("BudgetHealth should have 'projections' property")
+	}
+
+	projectionsProps, ok := projectionsProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Projections should have properties")
+	}
+
+	overrunProp, ok := projectionsProps["overrun"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Projections should have 'overrun' property")
+	}
+	if overrunProp["type"] != "boolean" {
+		t.Errorf("Expected overrun type to be 'boolean', got %v", overrunProp["type"])
+	}
+
+	t.Log("Successfully resolved deeply nested cross-package types!")
+}
+
+// Helper function for min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// Test to debug type resolution issues with external types
+func TestDebugExternalTypeResolution(t *testing.T) {
+	// Create a simple spec with just one external type
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Debug Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/test": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "test",
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Test",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[mock.User]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	t.Logf("Generated JSON:\n%s", string(jsonData))
+
+	// Check the reflect.Type information
+	userType := gopenapi.Object[mock.User]()
+	t.Logf("User type: %v", userType)
+	t.Logf("User type kind: %v", userType.Kind())
+	t.Logf("User type name: %v", userType.Name())
+	t.Logf("User type pkg path: %v", userType.PkgPath())
+
+	// Check field types
+	for i := 0; i < userType.NumField(); i++ {
+		field := userType.Field(i)
+		t.Logf("Field %s: type=%v, kind=%v, name=%v, pkgPath=%v",
+			field.Name, field.Type, field.Type.Kind(), field.Type.Name(), field.Type.PkgPath())
+	}
 }

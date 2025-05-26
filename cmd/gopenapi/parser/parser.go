@@ -485,7 +485,12 @@ func lookupImportedType(selector *ast.SelectorExpr, pkg *packages.Package) refle
 
 	// Get the underlying type
 	if typeObj, ok := obj.(*types.TypeName); ok {
-		return createReflectTypeFromGoTypes(typeObj.Type())
+		resolvedType := createReflectTypeFromGoTypes(typeObj.Type())
+		// Debug: log the resolved type
+		fmt.Fprintf(os.Stderr, "Debug: Resolved type %s.%s to %v (kind=%v, name=%v, pkgPath=%v)\n",
+			getTypeNameFromExpr(selector.X), selector.Sel.Name,
+			resolvedType, resolvedType.Kind(), resolvedType.Name(), resolvedType.PkgPath())
+		return resolvedType
 	}
 
 	return nil
@@ -508,6 +513,23 @@ func getTypeNameFromExpr(expr ast.Expr) string {
 
 // createReflectTypeFromGoTypes creates a reflect.Type from go/types.Type
 func createReflectTypeFromGoTypes(t types.Type) reflect.Type {
+	processing := make(map[types.Type]bool)
+	return createReflectTypeFromGoTypesWithProcessing(t, processing)
+}
+
+// createReflectTypeFromGoTypesWithProcessing creates a reflect.Type from go/types.Type with cycle detection
+func createReflectTypeFromGoTypesWithProcessing(t types.Type, processing map[types.Type]bool) reflect.Type {
+	// For named types, check if we're currently processing this exact type
+	if named, ok := t.(*types.Named); ok {
+		if processing[named] {
+			// For recursive types, we can't use reflect.StructOf, so return a placeholder
+			// But preserve the fact that it's a struct by returning an empty struct
+			return reflect.TypeOf(struct{}{})
+		}
+		processing[named] = true
+		defer delete(processing, named) // Remove from processing when done
+	}
+
 	switch typ := t.(type) {
 	case *types.Named:
 		// For named types, we need to preserve the package path and name information
@@ -534,30 +556,38 @@ func createReflectTypeFromGoTypes(t types.Type) reflect.Type {
 		switch underlyingType := underlying.(type) {
 		case *types.Struct:
 			// Complex struct type - create a struct type
-			return createStructType(underlyingType)
+			return createStructTypeWithProcessing(underlyingType, processing)
 		case *types.Basic:
 			// Named type with primitive underlying type (like type ID string)
 			// Return the underlying primitive type
-			return getReflectTypeFromGoTypesType(underlyingType)
+			return getReflectTypeFromGoTypesTypeWithProcessing(underlyingType, processing)
 		default:
 			// For other underlying types (slices, arrays, etc.), use the underlying type
-			return getReflectTypeFromGoTypesType(underlying)
+			return getReflectTypeFromGoTypesTypeWithProcessing(underlying, processing)
 		}
 	case *types.Struct:
-		return createStructType(typ)
+		return createStructTypeWithProcessing(typ, processing)
 	default:
-		return getReflectTypeFromGoTypesType(t)
+		return getReflectTypeFromGoTypesTypeWithProcessing(t, processing)
 	}
 }
 
 // getActualReflectType tries to get the actual reflect.Type for well-known types
 func getActualReflectType(pkgPath, typeName string) reflect.Type {
+	// Debug log
+	fullTypeName := pkgPath + "." + typeName
+
 	// For well-known standard library types, we can get the actual reflect.Type
-	switch pkgPath + "." + typeName {
+	switch fullTypeName {
 	case "time.Time":
 		return reflect.TypeOf((*time.Time)(nil)).Elem()
 	case "time.Duration":
 		return reflect.TypeOf((*time.Duration)(nil)).Elem()
+	// Add more standard library types
+	case "net/url.URL":
+		return reflect.TypeOf((*struct{})(nil)).Elem() // Placeholder for now
+	case "net.IP":
+		return reflect.TypeOf([]byte(nil)) // net.IP is []byte
 	}
 
 	// For other types, we can't easily get the actual reflect.Type without importing
@@ -567,6 +597,12 @@ func getActualReflectType(pkgPath, typeName string) reflect.Type {
 
 // createStructType creates a reflect.Type for a struct from go/types.Struct
 func createStructType(structType *types.Struct) reflect.Type {
+	processing := make(map[types.Type]bool)
+	return createStructTypeWithProcessing(structType, processing)
+}
+
+// createStructTypeWithProcessing creates a reflect.Type for a struct from go/types.Struct with cycle detection
+func createStructTypeWithProcessing(structType *types.Struct, processing map[types.Type]bool) reflect.Type {
 	numFields := structType.NumFields()
 	fields := make([]reflect.StructField, numFields)
 
@@ -578,7 +614,13 @@ func createStructType(structType *types.Struct) reflect.Type {
 		}
 
 		// Use the recursive type resolution to properly handle named types
-		fieldType := createReflectTypeFromGoTypes(field.Type())
+		fieldType := createReflectTypeFromGoTypesWithProcessing(field.Type(), processing)
+
+		// Debug: Log field type information
+		if fieldType.Kind() == reflect.Interface && field.Type() != nil {
+			// If we got interface{} but the original type wasn't interface, something went wrong
+			fmt.Fprintf(os.Stderr, "Warning: Field %s of type %v resolved to interface{}\n", field.Name(), field.Type())
+		}
 
 		fields[i] = reflect.StructField{
 			Name: field.Name(),
@@ -592,6 +634,12 @@ func createStructType(structType *types.Struct) reflect.Type {
 
 // getReflectTypeFromGoTypesType converts basic go/types.Type to reflect.Type
 func getReflectTypeFromGoTypesType(t types.Type) reflect.Type {
+	processing := make(map[types.Type]bool)
+	return getReflectTypeFromGoTypesTypeWithProcessing(t, processing)
+}
+
+// getReflectTypeFromGoTypesTypeWithProcessing converts basic go/types.Type to reflect.Type with cycle detection
+func getReflectTypeFromGoTypesTypeWithProcessing(t types.Type, processing map[types.Type]bool) reflect.Type {
 	switch typ := t.(type) {
 	case *types.Basic:
 		switch typ.Kind() {
@@ -628,20 +676,20 @@ func getReflectTypeFromGoTypesType(t types.Type) reflect.Type {
 		}
 	case *types.Slice:
 		// Use recursive resolution for slice elements
-		elemType := createReflectTypeFromGoTypes(typ.Elem())
+		elemType := createReflectTypeFromGoTypesWithProcessing(typ.Elem(), processing)
 		return reflect.SliceOf(elemType)
 	case *types.Pointer:
 		// Use recursive resolution for pointer elements
-		elemType := createReflectTypeFromGoTypes(typ.Elem())
+		elemType := createReflectTypeFromGoTypesWithProcessing(typ.Elem(), processing)
 		return reflect.PointerTo(elemType)
 	case *types.Map:
 		// Handle map types
-		keyType := createReflectTypeFromGoTypes(typ.Key())
-		valueType := createReflectTypeFromGoTypes(typ.Elem())
+		keyType := createReflectTypeFromGoTypesWithProcessing(typ.Key(), processing)
+		valueType := createReflectTypeFromGoTypesWithProcessing(typ.Elem(), processing)
 		return reflect.MapOf(keyType, valueType)
 	case *types.Named:
 		// This should be handled by createReflectTypeFromGoTypes, but add as fallback
-		return createReflectTypeFromGoTypes(typ)
+		return createReflectTypeFromGoTypesWithProcessing(typ, processing)
 	default:
 		return reflect.TypeOf((*interface{})(nil)).Elem()
 	}
