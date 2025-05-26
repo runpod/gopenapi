@@ -1732,12 +1732,13 @@ func typeToGoType(t reflect.Type) string {
 
 // typeToGoTypeRecursive resolves named types to their underlying types with cycle detection
 func typeToGoTypeRecursive(t reflect.Type, visited map[reflect.Type]bool) string {
-	// Prevent infinite recursion
+	// Prevent infinite recursion - if we've seen this type before, it's a cycle
 	if visited[t] {
 		return "interface{}"
 	}
+
+	// Mark this type as being processed
 	visited[t] = true
-	defer delete(visited, t)
 
 	// If this is a named type, we need to check what it's based on
 	if t.PkgPath() != "" && t.Name() != "" {

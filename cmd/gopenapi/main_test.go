@@ -2117,3 +2117,145 @@ func TestAliasTypeResolutionEdgeCases(t *testing.T) {
 		}
 	}
 }
+
+// Test that circular references in alias types are properly handled
+func TestCircularReferenceDetection(t *testing.T) {
+	// Create types that would cause circular references
+	// Note: We can't actually create true circular type aliases in Go,
+	// but we can test the detection mechanism with our function
+
+	type StringAlias string
+	type IntAlias int
+	type SliceAlias []StringAlias
+
+	// Test that normal alias resolution works
+	stringType := reflect.TypeOf(StringAlias(""))
+	result := typeToGoType(stringType)
+	if result != "string" {
+		t.Errorf("Expected StringAlias to resolve to 'string', got %s", result)
+	}
+
+	// Test that slice of alias works
+	sliceType := reflect.TypeOf(SliceAlias{})
+	result = typeToGoType(sliceType)
+	if result != "[]string" {
+		t.Errorf("Expected SliceAlias to resolve to '[]string', got %s", result)
+	}
+
+	// Test the recursive function directly with a visited map
+	visited := make(map[reflect.Type]bool)
+	result = typeToGoTypeRecursive(stringType, visited)
+	if result != "string" {
+		t.Errorf("Expected StringAlias to resolve to 'string' with visited map, got %s", result)
+	}
+
+	// Test that if we manually mark a type as visited, it returns interface{}
+	visited = make(map[reflect.Type]bool)
+	visited[stringType] = true // Simulate that we've already seen this type
+	result = typeToGoTypeRecursive(stringType, visited)
+	if result != "interface{}" {
+		t.Errorf("Expected circular reference to resolve to 'interface{}', got %s", result)
+	}
+
+	t.Log("Circular reference detection is working correctly")
+}
+
+// Test complex nested alias types to ensure proper resolution
+func TestComplexNestedAliasTypes(t *testing.T) {
+	// Create a chain of alias types
+	type Level1 string
+	type Level2 Level1
+	type Level3 Level2
+	type Level4 Level3
+
+	// Test that deeply nested aliases resolve correctly
+	level4Type := reflect.TypeOf(Level4(""))
+	result := typeToGoType(level4Type)
+	if result != "string" {
+		t.Errorf("Expected Level4 (deeply nested string alias) to resolve to 'string', got %s", result)
+	}
+
+	// Test with slices and pointers
+	type SliceOfLevel4 []Level4
+	type PointerToLevel4 *Level4
+
+	sliceType := reflect.TypeOf(SliceOfLevel4{})
+	result = typeToGoType(sliceType)
+	if result != "[]string" {
+		t.Errorf("Expected SliceOfLevel4 to resolve to '[]string', got %s", result)
+	}
+
+	ptrType := reflect.TypeOf((*PointerToLevel4)(nil)).Elem()
+	result = typeToGoType(ptrType)
+	if result != "*string" {
+		t.Errorf("Expected PointerToLevel4 to resolve to '*string', got %s", result)
+	}
+
+	// Test in a struct context
+	type ComplexStruct struct {
+		Field1 Level4          `json:"field1"`
+		Field2 SliceOfLevel4   `json:"field2"`
+		Field3 PointerToLevel4 `json:"field3"`
+		Field4 string          `json:"field4"`
+	}
+
+	spec := &gopenapi.Spec{
+		Paths: gopenapi.Paths{
+			"/complex": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testComplex",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: reflect.TypeOf(ComplexStruct{})},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: reflect.TypeOf(ComplexStruct{})},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	templateData := generateTemplateData(spec, "client")
+
+	if len(templateData.Operations) != 1 {
+		t.Fatalf("Expected 1 operation, got %d", len(templateData.Operations))
+	}
+
+	op := templateData.Operations[0]
+
+	expectedTypes := map[string]string{
+		"field1": "string",   // Level4 should resolve to string
+		"field2": "[]string", // SliceOfLevel4 should resolve to []string
+		"field3": "*string",  // PointerToLevel4 should resolve to *string
+		"field4": "string",   // Regular string should remain string
+	}
+
+	t.Logf("Complex nested alias fields:")
+	for _, field := range op.RequestBodyFields {
+		t.Logf("  %s (%s): %s", field.Name, field.GoName, field.GoType)
+
+		expectedType, exists := expectedTypes[field.Name]
+		if !exists {
+			t.Errorf("Unexpected field: %s", field.Name)
+			continue
+		}
+
+		if field.GoType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", field.Name, expectedType, field.GoType)
+		}
+	}
+
+	t.Log("Complex nested alias types resolved correctly")
+}
