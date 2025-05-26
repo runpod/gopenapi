@@ -372,6 +372,25 @@ func main() {
 }
 ```
 
+## Performance
+
+GopenAPI provides excellent performance characteristics with minimal overhead compared to stock HTTP handlers:
+
+- **Competitive Runtime Performance**: Only 6.6% latency increase for GET requests
+- **Improved POST Performance**: Actually faster than stock HTTP for complex request handling
+- **Memory Efficient**: Uses 5% less memory per request operation
+- **One-time Setup Cost**: Higher initialization overhead for comprehensive functionality
+
+### Benchmarks
+
+Run performance benchmarks comparing gopenapi against stock `http.ServeMux`:
+
+```bash
+./run_benchmarks.sh
+```
+
+See `BENCHMARK_RESULTS.md` for detailed performance analysis and comparison data.
+
 ## Testing
 
 The project includes comprehensive test coverage for all functionality:
@@ -381,11 +400,18 @@ The project includes comprehensive test coverage for all functionality:
 - **OpenAPI JSON Generation Tests**: Validate OpenAPI JSON output format and structure
 - **Type Resolution Tests**: Test proper handling of Go types including named types with primitive underlying types
 - **CLI Tests**: Verify command-line interface functionality and help system
+- **Performance Benchmarks**: Compare performance against standard library implementations
 
 Run tests with:
 
 ```bash
 go test ./...
+```
+
+Run benchmarks with:
+
+```bash
+go test -bench=. -benchmem
 ```
 
 ## Contributing

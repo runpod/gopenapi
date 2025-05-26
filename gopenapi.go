@@ -470,15 +470,23 @@ func handle(spec *Spec, operation *Operation) (http.HandlerFunc, error) {
 		}
 		handler = middlewareHandler(handler)
 	}
+	handlerContextValue := RequestContext{
+		spec:      spec,
+		operation: operation,
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), OperationKey, operation)
-		ctx = context.WithValue(ctx, SpecKey, spec)
-		r = r.WithContext(ctx)
-		handler.ServeHTTP(w, r)
+		// Add both spec and operation to the request context in a single chain (preserving existing context)
+		ctx := context.WithValue(r.Context(), RequestContextKey, handlerContextValue)
+		handler.ServeHTTP(w, r.WithContext(ctx))
 	}, nil
 }
 
 func NewServerMux(spec *Spec) (http.Handler, error) {
+	// resolve references first
+	if err := resolveRefs(spec); err != nil {
+		return nil, fmt.Errorf("failed to resolve schema references: %w", err)
+	}
+
 	mux := http.NewServeMux()
 	hosts := make([]string, len(spec.Servers))
 	if spec.SecurityMiddleware == nil {
@@ -519,10 +527,7 @@ func NewServerMux(spec *Spec) (http.Handler, error) {
 			}
 		}
 	}
-	// resolve references here
-	if err := resolveRefs(spec); err != nil {
-		return nil, fmt.Errorf("failed to resolve schema references: %w", err)
-	}
+
 	return mux, nil
 }
 
@@ -532,13 +537,16 @@ func NewServer(spec *Spec, port string) (*Server, error) {
 		return nil, err
 	}
 	// resolveRefs(spec)
-	ctx := context.WithValue(context.Background(), SpecKey, spec)
+	baseCtx := context.WithValue(context.Background(), RequestContextKey, RequestContext{
+		spec:      spec,
+		operation: nil,
+	})
 	return &Server{
 		Server: http.Server{
 			Addr:    fmt.Sprintf(":%s", port),
 			Handler: handler,
 			BaseContext: func(l net.Listener) context.Context {
-				return ctx
+				return baseCtx
 			},
 		},
 		Spec: *spec,
@@ -555,17 +563,21 @@ func Serve(ctx context.Context, listener net.Listener, spec *Spec) error {
 
 type key[T any] struct{}
 
+type RequestContext struct {
+	spec      *Spec
+	operation *Operation
+}
+
 var (
-	SpecKey      = key[Spec]{}
-	OperationKey = key[Operation]{}
+	RequestContextKey = key[RequestContext]{}
 )
 
 func specFromContext(ctx context.Context) (*Spec, bool) {
-	spec, ok := ctx.Value(SpecKey).(*Spec)
+	requestCtx, ok := ctx.Value(RequestContextKey).(RequestContext)
 	if !ok {
 		return nil, false
 	}
-	return spec, true
+	return requestCtx.spec, true
 }
 
 func SpecFromRequest(r *http.Request) (Spec, bool) {
@@ -577,11 +589,11 @@ func SpecFromRequest(r *http.Request) (Spec, bool) {
 }
 
 func OperationFromRequest(r *http.Request) (*Operation, bool) {
-	operation, ok := r.Context().Value(OperationKey).(*Operation)
+	requestCtx, ok := r.Context().Value(RequestContextKey).(RequestContext)
 	if !ok {
 		return nil, false
 	}
-	return operation, true
+	return requestCtx.operation, true
 }
 
 func WriteResponse(w http.ResponseWriter, status int, body any) {
@@ -609,14 +621,14 @@ func resolveRefs(spec *Spec) error {
 			// Resolve parameter schema references
 			for i := range operation.Parameters {
 				if err := resolveSchemaRefWithTracking(&operation.Parameters[i].Schema, spec, resolving); err != nil {
-					return fmt.Errorf("failed to resolve parameter schema ref in %s: %w", pathPattern, err)
+					return fmt.Errorf("gopenapi.resolveRefs: failed to resolve parameter schema ref in %s: %w", pathPattern, err)
 				}
 			}
 
 			// Resolve request body schema references
 			for mediaType, content := range operation.RequestBody.Content {
 				if err := resolveSchemaRefWithTracking(&content.Schema, spec, resolving); err != nil {
-					return fmt.Errorf("failed to resolve request body schema ref for %s in %s: %w", mediaType, pathPattern, err)
+					return fmt.Errorf("gopenapi.resolveRefs: failed to resolve request body schema ref for %s in %s: %w", mediaType, pathPattern, err)
 				}
 				// Update the content in the map since we modified the schema
 				operation.RequestBody.Content[mediaType] = content
@@ -626,7 +638,7 @@ func resolveRefs(spec *Spec) error {
 			for statusCode, response := range operation.Responses {
 				for mediaType, content := range response.Content {
 					if err := resolveSchemaRefWithTracking(&content.Schema, spec, resolving); err != nil {
-						return fmt.Errorf("failed to resolve response schema ref for status %d, media type %s in %s: %w", statusCode, mediaType, pathPattern, err)
+						return fmt.Errorf("gopenapi.resolveRefs: failed to resolve response schema ref for status %d, media type %s in %s: %w", statusCode, mediaType, pathPattern, err)
 					}
 					// Update the content in the map since we modified the schema
 					response.Content[mediaType] = content
@@ -648,12 +660,12 @@ func resolveSchemaRefWithTracking(schema *Schema, spec *Spec, resolving map[stri
 
 	// Only handle local references (starting with #)
 	if !strings.HasPrefix(schema.Ref, "#") {
-		return fmt.Errorf("external references not supported: %s", schema.Ref)
+		return fmt.Errorf("gopenapi.resolveSchemaRefWithTracking: external references not supported: %s", schema.Ref)
 	}
 
 	// Check for circular reference
 	if resolving[schema.Ref] {
-		return fmt.Errorf("circular reference detected for: %s", schema.Ref)
+		return fmt.Errorf("gopenapi.resolveSchemaRefWithTracking: circular reference detected for: %s", schema.Ref)
 	}
 
 	// Mark this reference as being resolved
