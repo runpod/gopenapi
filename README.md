@@ -13,7 +13,7 @@
 ## Installation
 
 ```bash
-go get github.com/gabewillen/gopenapi 
+go get github.com/runpod/gopenapi 
 ```
 
 
@@ -26,7 +26,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/gabewillen/gopenapi" // Replace with your actual import path
+	"github.com/runpod/gopenapi" // Replace with your actual import path
 )
 
 // Define a struct for your data
