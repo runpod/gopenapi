@@ -933,55 +933,7 @@ func schemaToJSON(schema gopenapi.Schema) map[string]interface{} {
 			if schema.Type.Kind() == reflect.Struct {
 				schemaObj["type"] = "object"
 				// Add properties based on struct fields
-				properties := make(map[string]interface{})
-				for i := 0; i < schema.Type.NumField(); i++ {
-					field := schema.Type.Field(i)
-					if !field.IsExported() {
-						continue
-					}
-
-					jsonTag := field.Tag.Get("json")
-					fieldName := field.Name
-					if jsonTag != "" {
-						parts := strings.Split(jsonTag, ",")
-						if parts[0] != "" && parts[0] != "-" {
-							fieldName = parts[0]
-						}
-					}
-
-					fieldSchema := map[string]interface{}{
-						"type": goTypeToOpenAPIType(field.Type),
-					}
-
-					// If the field is a struct, recursively generate its properties
-					if field.Type.Kind() == reflect.Struct {
-						nestedProperties := make(map[string]interface{})
-						for j := 0; j < field.Type.NumField(); j++ {
-							nestedField := field.Type.Field(j)
-							if !nestedField.IsExported() {
-								continue
-							}
-
-							nestedJsonTag := nestedField.Tag.Get("json")
-							nestedFieldName := nestedField.Name
-							if nestedJsonTag != "" {
-								parts := strings.Split(nestedJsonTag, ",")
-								if parts[0] != "" && parts[0] != "-" {
-									nestedFieldName = parts[0]
-								}
-							}
-
-							nestedProperties[nestedFieldName] = map[string]interface{}{
-								"type": goTypeToOpenAPIType(nestedField.Type),
-							}
-						}
-						if len(nestedProperties) > 0 {
-							fieldSchema["properties"] = nestedProperties
-						}
-					}
-
-					properties[fieldName] = fieldSchema
-				}
+				properties := generateStructProperties(schema.Type)
 				if len(properties) > 0 {
 					schemaObj["properties"] = properties
 				}
@@ -992,6 +944,84 @@ func schemaToJSON(schema gopenapi.Schema) map[string]interface{} {
 	}
 
 	return schemaObj
+}
+
+// generateStructProperties recursively generates properties for struct types
+func generateStructProperties(t reflect.Type) map[string]interface{} {
+	properties := make(map[string]interface{})
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+
+		jsonTag := field.Tag.Get("json")
+		fieldName := field.Name
+		if jsonTag != "" {
+			parts := strings.Split(jsonTag, ",")
+			if parts[0] != "" && parts[0] != "-" {
+				fieldName = parts[0]
+			}
+		}
+
+		// Generate schema for this field
+		fieldSchema := generateFieldSchema(field.Type)
+		properties[fieldName] = fieldSchema
+	}
+
+	return properties
+}
+
+// generateFieldSchema generates the schema for a single field type
+func generateFieldSchema(t reflect.Type) map[string]interface{} {
+	schema := map[string]interface{}{}
+
+	// Handle special types first
+	if t.PkgPath() != "" && t.Name() != "" {
+		typeFullName := t.PkgPath() + "." + t.Name()
+		switch typeFullName {
+		case "time.Time":
+			schema["type"] = "string"
+			return schema
+		case "time.Duration":
+			schema["type"] = "integer"
+			return schema
+		}
+	}
+
+	// Handle types by kind
+	switch t.Kind() {
+	case reflect.String:
+		schema["type"] = "string"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		schema["type"] = "integer"
+	case reflect.Float32, reflect.Float64:
+		schema["type"] = "number"
+	case reflect.Bool:
+		schema["type"] = "boolean"
+	case reflect.Slice, reflect.Array:
+		schema["type"] = "array"
+		// TODO: Add items schema for array elements
+	case reflect.Struct:
+		schema["type"] = "object"
+		// Recursively generate properties for nested structs
+		properties := generateStructProperties(t)
+		if len(properties) > 0 {
+			schema["properties"] = properties
+		}
+	case reflect.Ptr:
+		// For pointers, use the element type
+		return generateFieldSchema(t.Elem())
+	case reflect.Map:
+		schema["type"] = "object"
+		// TODO: Add additionalProperties for map values
+	default:
+		schema["type"] = "object"
+	}
+
+	return schema
 }
 
 // contentToJSON converts gopenapi.Content to JSON format

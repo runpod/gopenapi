@@ -1444,3 +1444,244 @@ func TestDeeplyNestedExternalTypes(t *testing.T) {
 
 	t.Log("Successfully resolved all deeply nested external types!")
 }
+
+// Test recursive type resolution for nested structs
+func TestRecursiveStructTypeResolution(t *testing.T) {
+	// Create test types that mimic the device response structure
+	type Bytes int64
+
+	type Snapshot struct {
+		Total Bytes `json:"total"`
+		Used  Bytes `json:"used"`
+		Free  Bytes `json:"free"`
+	}
+
+	type Process struct {
+		PID    int    `json:"pid"`
+		Name   string `json:"name"`
+		Memory Bytes  `json:"memory"`
+	}
+
+	type DeviceResponse struct {
+		ID          uint      `json:"ID"`
+		Index       uint      `json:"Index"`
+		Kind        string    `json:"Kind"`
+		Memory      Snapshot  `json:"Memory"`    // Nested struct
+		Processes   []Process `json:"Processes"` // Slice of structs
+		Errors      []string  `json:"Errors"`
+		Temperature float64   `json:"Temperature"`
+	}
+
+	// Create a spec using the nested types
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Device API with Nested Types",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/device/{id}": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "getDeviceById",
+					Parameters: gopenapi.Parameters{
+						{
+							Name:     "id",
+							In:       gopenapi.InPath,
+							Required: true,
+							Schema:   gopenapi.Schema{Type: gopenapi.String},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Device details",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[DeviceResponse]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Convert to OpenAPI JSON
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Parse the JSON to verify structure
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to the response schema
+	paths := result["paths"].(map[string]interface{})
+	devicePath := paths["/device/{id}"].(map[string]interface{})
+	getOp := devicePath["get"].(map[string]interface{})
+	responses := getOp["responses"].(map[string]interface{})
+	resp200 := responses["200"].(map[string]interface{})
+	content := resp200["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+
+	// Verify the main object
+	if schema["type"] != "object" {
+		t.Errorf("Expected root schema type to be 'object', got %v", schema["type"])
+	}
+
+	properties := schema["properties"].(map[string]interface{})
+
+	// Check Memory field is properly resolved as an object with nested properties
+	memoryProp := properties["Memory"].(map[string]interface{})
+	if memoryProp["type"] != "object" {
+		t.Errorf("Expected Memory type to be 'object', got %v", memoryProp["type"])
+	}
+
+	// Verify Memory has nested properties
+	memoryProps, ok := memoryProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Memory should have properties")
+	}
+
+	// Check nested fields in Memory
+	totalProp := memoryProps["total"].(map[string]interface{})
+	if totalProp["type"] != "integer" {
+		t.Errorf("Expected Memory.total type to be 'integer', got %v", totalProp["type"])
+	}
+
+	usedProp := memoryProps["used"].(map[string]interface{})
+	if usedProp["type"] != "integer" {
+		t.Errorf("Expected Memory.used type to be 'integer', got %v", usedProp["type"])
+	}
+
+	freeProp := memoryProps["free"].(map[string]interface{})
+	if freeProp["type"] != "integer" {
+		t.Errorf("Expected Memory.free type to be 'integer', got %v", freeProp["type"])
+	}
+
+	// Check Processes field is an array
+	processesProp := properties["Processes"].(map[string]interface{})
+	if processesProp["type"] != "array" {
+		t.Errorf("Expected Processes type to be 'array', got %v", processesProp["type"])
+	}
+
+	// Check other fields
+	if properties["ID"].(map[string]interface{})["type"] != "integer" {
+		t.Error("ID should be integer")
+	}
+	if properties["Temperature"].(map[string]interface{})["type"] != "number" {
+		t.Error("Temperature should be number")
+	}
+
+	t.Log("Successfully resolved nested struct types recursively")
+}
+
+// Test even deeper nesting with struct-in-struct-in-struct
+func TestDeeplyNestedStructResolution(t *testing.T) {
+	type Level3 struct {
+		Value string `json:"value"`
+	}
+
+	type Level2 struct {
+		Name string `json:"name"`
+		Deep Level3 `json:"deep"`
+	}
+
+	type Level1 struct {
+		ID     int    `json:"id"`
+		Nested Level2 `json:"nested"`
+	}
+
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Deeply Nested API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/nested": gopenapi.Path{
+				Get: &gopenapi.Operation{
+					OperationId: "getDeeplyNested",
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Deeply nested response",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[Level1]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() error = %v", err)
+	}
+
+	// Print the JSON for debugging
+	t.Logf("Generated JSON:\n%s", string(jsonData))
+
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON is invalid: %v", err)
+	}
+
+	// Navigate to the nested properties
+	paths := result["paths"].(map[string]interface{})
+	nestedPath := paths["/nested"].(map[string]interface{})
+	getOp := nestedPath["get"].(map[string]interface{})
+	responses := getOp["responses"].(map[string]interface{})
+	resp200 := responses["200"].(map[string]interface{})
+	content := resp200["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+
+	// Level 1 properties
+	level1Props, ok := schema["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Level 1 should have properties")
+	}
+
+	nestedProp, ok := level1Props["nested"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Level 1 should have 'nested' property")
+	}
+
+	// Level 2 properties
+	level2Props, ok := nestedProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Level 2 (nested) should have properties")
+	}
+
+	deepProp, ok := level2Props["deep"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Level 2 should have 'deep' property")
+	}
+
+	// Level 3 properties
+	level3Props, ok := deepProp["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Level 3 (deep) should have properties")
+	}
+
+	valueProp, ok := level3Props["value"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Level 3 should have 'value' property")
+	}
+
+	if valueProp["type"] != "string" {
+		t.Errorf("Expected deeply nested value type to be 'string', got %v", valueProp["type"])
+	}
+
+	t.Log("Successfully resolved deeply nested struct types (3 levels deep)")
+}
