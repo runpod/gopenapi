@@ -512,12 +512,21 @@ func createReflectTypeFromGoTypes(t types.Type) reflect.Type {
 	case *types.Named:
 		// For named types, we need to preserve the package path and name information
 		// Try to get the actual reflect.Type for well-known types
-		pkgPath := typ.Obj().Pkg().Path()
-		typeName := typ.Obj().Name()
+		var pkgPath string
+		var typeName string
+
+		if typ.Obj() != nil {
+			typeName = typ.Obj().Name()
+			if typ.Obj().Pkg() != nil {
+				pkgPath = typ.Obj().Pkg().Path()
+			}
+		}
 
 		// Try to get the actual type by creating a zero value
-		if actualType := getActualReflectType(pkgPath, typeName); actualType != nil {
-			return actualType
+		if pkgPath != "" && typeName != "" {
+			if actualType := getActualReflectType(pkgPath, typeName); actualType != nil {
+				return actualType
+			}
 		}
 
 		// Fallback: check the underlying type

@@ -999,3 +999,213 @@ func TestMockNestedSliceAliases(t *testing.T) {
 
 	t.Log("Successfully resolved all mock nested slice types!")
 }
+
+// Test edge cases that could cause nil pointer panics
+func TestNilPointerEdgeCases(t *testing.T) {
+	// This test ensures we handle edge cases that could cause nil pointer panics
+	// when dealing with types that don't have package information
+
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Nil Pointer Edge Cases Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/edge-cases": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testEdgeCases",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									// Basic types that shouldn't cause issues
+									Name   string `json:"name"`
+									Count  int    `json:"count"`
+									Active bool   `json:"active"`
+
+									// Types from standard library
+									Created time.Time     `json:"created"`
+									Timeout time.Duration `json:"timeout"`
+
+									// Mock package types
+									UserID    mock.UserID    `json:"user_id"`
+									ProductID mock.ProductID `json:"product_id"`
+									Price     mock.Price     `json:"price"`
+
+									// Nested structures
+									User    mock.User    `json:"user"`
+									Product mock.Product `json:"product"`
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.String},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// This should not panic - if it does, we have a nil pointer issue
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() should not error, got: %v", err)
+	}
+
+	// Verify it's valid JSON
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON should be valid, got error: %v", err)
+	}
+
+	// Basic validation that the structure is correct
+	paths, ok := result["paths"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Paths should be an object")
+	}
+
+	edgeCasesPath, ok := paths["/edge-cases"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Edge cases path should exist")
+	}
+
+	postOp, ok := edgeCasesPath["post"].(map[string]interface{})
+	if !ok {
+		t.Fatal("POST operation should exist")
+	}
+
+	if postOp["operationId"] != "testEdgeCases" {
+		t.Errorf("Expected operationId 'testEdgeCases', got %v", postOp["operationId"])
+	}
+
+	t.Log("Successfully handled all edge cases without nil pointer panics!")
+}
+
+// Test with various problematic type scenarios
+func TestProblematicTypeScenarios(t *testing.T) {
+	// Test scenarios that might cause issues in type resolution
+
+	spec := gopenapi.Spec{
+		OpenAPI: "3.0.0",
+		Info: gopenapi.Info{
+			Title:   "Problematic Type Scenarios Test API",
+			Version: "1.0.0",
+		},
+		Paths: gopenapi.Paths{
+			"/problematic": gopenapi.Path{
+				Post: &gopenapi.Operation{
+					OperationId: "testProblematicTypes",
+					RequestBody: gopenapi.RequestBody{
+						Required: true,
+						Content: gopenapi.Content{
+							gopenapi.ApplicationJSON: {
+								Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+									// Pointer types
+									OptionalString *string      `json:"optional_string,omitempty"`
+									OptionalInt    *int         `json:"optional_int,omitempty"`
+									OptionalTime   *time.Time   `json:"optional_time,omitempty"`
+									OptionalUser   *mock.User   `json:"optional_user,omitempty"`
+									OptionalUserID *mock.UserID `json:"optional_user_id,omitempty"`
+
+									// Slice types
+									StringSlice []string      `json:"string_slice"`
+									IntSlice    []int         `json:"int_slice"`
+									TimeSlice   []time.Time   `json:"time_slice"`
+									UserSlice   []mock.User   `json:"user_slice"`
+									UserIDSlice []mock.UserID `json:"user_id_slice"`
+
+									// Map types (these might be tricky)
+									StringMap map[string]string      `json:"string_map"`
+									UserMap   map[string]mock.User   `json:"user_map"`
+									UserIDMap map[mock.UserID]string `json:"user_id_map"`
+
+									// Interface types
+									AnyValue interface{} `json:"any_value"`
+
+									// Nested complex types
+									Analytics     mock.Analytics    `json:"analytics"`
+									OptionalUser2 mock.OptionalUser `json:"optional_user2"`
+								}]()},
+							},
+						},
+					},
+					Responses: gopenapi.Responses{
+						200: {
+							Description: "Success",
+							Content: gopenapi.Content{
+								gopenapi.ApplicationJSON: {
+									Schema: gopenapi.Schema{Type: gopenapi.Object[struct {
+										Success bool `json:"success"`
+									}]()},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// This should not panic regardless of the complex types
+	jsonData, err := SpecToOpenAPIJSON(&spec)
+	if err != nil {
+		t.Fatalf("SpecToOpenAPIJSON() should not error with complex types, got: %v", err)
+	}
+
+	// Verify it's valid JSON
+	var result map[string]interface{}
+	err = json.Unmarshal(jsonData, &result)
+	if err != nil {
+		t.Fatalf("Generated JSON should be valid with complex types, got error: %v", err)
+	}
+
+	// Navigate to the request body to verify some types were processed
+	paths := result["paths"].(map[string]interface{})
+	problematicPath := paths["/problematic"].(map[string]interface{})
+	postOp := problematicPath["post"].(map[string]interface{})
+	requestBody := postOp["requestBody"].(map[string]interface{})
+	content := requestBody["content"].(map[string]interface{})
+	appJson := content["application/json"].(map[string]interface{})
+	schema := appJson["schema"].(map[string]interface{})
+	properties := schema["properties"].(map[string]interface{})
+
+	// Verify some key types are correctly resolved
+	expectedTypes := map[string]string{
+		"optional_string": "string", // *string should be string
+		"string_slice":    "array",  // []string should be array
+		"user_id_slice":   "array",  // []mock.UserID should be array
+		"analytics":       "object", // mock.Analytics should be object
+		"any_value":       "object", // interface{} should be object
+	}
+
+	for fieldName, expectedType := range expectedTypes {
+		prop, exists := properties[fieldName].(map[string]interface{})
+		if !exists {
+			t.Errorf("Field %s should exist", fieldName)
+			continue
+		}
+
+		actualType, exists := prop["type"].(string)
+		if !exists {
+			t.Errorf("Field %s should have a type", fieldName)
+			continue
+		}
+
+		if actualType != expectedType {
+			t.Errorf("Field %s: expected type %s, got %s", fieldName, expectedType, actualType)
+		}
+	}
+
+	t.Log("Successfully handled all problematic type scenarios!")
+}
